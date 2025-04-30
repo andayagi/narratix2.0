@@ -1,0 +1,1 @@
+# External services tests package initialization 
