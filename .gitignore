@@ -20,48 +20,20 @@ var/
 .installed.cfg
 *.egg
 
-# Virtual Environments
+# Environment
+.env
+.venv
+env/
 venv/
 ENV/
-.env
-.venv/
-
-# Testing
-.coverage
-htmlcov/
-.pytest_cache/
-.hypothesis/
-.tox/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
-.DS_Store
 
 # Project specific
-output/
 logs/
-cache/
-data/*.db
-metrics/*.json
-
-# Audio files (consider using Git LFS instead)
-*.mp3
-*.wav
-*.ogg
-*.aac
-*.flac
-
-# Large data files
-*.pkl
-*.zip
-*.tar.gz
-
-# API response cache
-*_response.json
-api_calls.json
-
-# Documentation build
-docs/_build/
+audio_files/
+.DS_Store
