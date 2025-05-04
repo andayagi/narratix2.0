@@ -1,19 +1,17 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
-# AI Development Workflow Guidelines for Cursor
-
 Per development task given follow these steps - ONE STEP AT A TIME then circle back to chat:
 1.  **Requirement Analysis & Planning:** Before coding, analyze the request, look at relevant files and docs, stay true to it's objective and outline requirements, and propose an implementation plan. ALWAYS be lean, plan ONLY what's needed for the task **Confirm this plan with the user before proceeding.**
-2.  **Code Generation:** Generate code based on the confirmed plan following project standards ([architecture.mdc](mdc:.cursor/rules/architecture.mdc), [tech_stack.mdc](mdc:.cursor/rules/tech_stack.mdc)). 
+2.  **Code Generation:** Generate code based on the confirmed plan following project standards (@architecture.mdc, @tech_stack.mdc). 
    - Prioritize clean, minimal code. Avoid unnecessary abstractions or features unless requested.
    - Keep comments concise, only where they add clarity. Favor simplicity and relevance to the task.
-3.  **Testing:** Write and execute tests ([testing.mdc](mdc:.cursor/rules/testing.mdc)). Present test results to the user. **Wait for user confirmation before integrating or moving to the next step.**
+3.  **Testing:** Write and execute tests (@testing.mdc). Present test results to the user. **Wait for user confirmation before integrating or moving to the next step.**
 4.  **Integration:** Integrate the tested code into the existing codebase.
-5.  **Documentation:** Generate necessary documentation ([documentation.mdc](mdc:.cursor/rules/documentation.mdc)).
-6.  **Consistency Principle:** Go over all file to ensure consistency with the new code. Ensure alignment across all relevant files, including requirements (@docs/requirements/week_1_tasks.md), the MVP plan (@docs/narratix_mvp_plan.md), and other defined rules.
+5.  **Documentation:** Generate necessary documentation (@documentation.mdc).
+6.  **Consistency Principle:** Go over all files to ensure consistency with the new code. Ensure alignment across all relevant files, including requirements (@docs/requirements/week_1_tasks.md), the MVP plan (@docs/narratix_mvp_plan.md), and other defined rules.
 7.  **Review:** Present the completed work (code, tests, docs) for final user review.
 8.  **Git/GitHub:** After user approval, prepare Git commits and push:
    - Write clear, concise commit messages describing the changes
@@ -24,14 +22,4 @@ Per development task given follow these steps - ONE STEP AT A TIME then circle b
 
 **End thread:** each thread\conversation will handle only one task, never continue to a new task. 
 
-## Rule: Avoid Over-Coding and Over-Documenting
 
-- Prioritize writing clean, minimal, and purposeful code.
-- Do not generate unnecessary helper functions, abstractions, or features unless explicitly requested.
-- Avoid boilerplate or speculative code.
-- Keep comments concise and only where they add real clarity — no obvious explanations.
-- Do not document code excessively or repeat what the code already expresses clearly.
-- Favor simplicity, directness, and relevance to the task at hand.
-
-
-Reference: [docs/narratix_mvp_plan.md](mdc:docs/narratix_mvp_plan.md)

@@ -1,85 +1,26 @@
 [tool.poetry]
 name = "narratix"
-version = "2.0.0"
-description = "Transform text to dramatized audio using AI voices"
+version = "0.1.0"
+description = "A voice analysis and synthesis toolkit"
 authors = ["Your Name <your.email@example.com>"]
-readme = "README.md"
-license = "MIT"
-packages = [{include = "narratix"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
-sqlalchemy = "^2.0.26"
-click = "^8.1.7"
-anthropic = "^0.19.0"
-pydub = "^0.25.1"
-tqdm = "^4.66.1"
-python-dotenv = "^1.0.1"
-hume = "^0.4.2"
-mkdocs = "^1.5.3"
+python = "^3.9"
+fastapi = "^0.104.0"
+pydantic = "^2.4.2"
+pydantic-settings = "^2.0.3"
+sqlalchemy = "^2.0.23"
+alembic = "^1.12.1"
+anthropic = "^0.3.11"
+python-dotenv = "^1.0.0"
+uvicorn = "^0.24.0"
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
-black = "^24.1.1"
-isort = "^5.13.2"
-ruff = "^0.4.4"
-pytest-cov = "^4.1.0"
-pre-commit = "^3.5.0"
-
-[tool.poetry.scripts]
-narratix = "narratix.presentation.cli:main"
+[tool.poetry.dev-dependencies]
+pytest = "^7.4.3"
+black = "^23.10.1"
+isort = "^5.12.0"
+flake8 = "^6.1.0"
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.black]
-line-length = 88
-target-version = ["py310"]
-
-[tool.isort]
-profile = "black"
-line_length = 88
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = "test_*.py"
-python_functions = "test_*"
-
-# Add Ruff configuration
-[tool.ruff]
-line-length = 88
-select = ["E", "F", "W", "I", "UP", "N", "B", "Q"]
-ignore = []
-
-# Exclude common directories
-exclude = [
-    ".bzr",
-    ".direnv",
-    ".eggs",
-    ".git",
-    ".hg",
-    ".mypy_cache",
-    ".nox",
-    ".pants.d",
-    ".ruff_cache",
-    ".svn",
-    ".tox",
-    ".venv",
-    "__pypackages__",
-    "_build",
-    "buck-out",
-    "build",
-    "dist",
-    "node_modules",
-    "venv",
-]
-
-# Assume Python 3.10
-target-version = "py310"
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto" 
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api" 
