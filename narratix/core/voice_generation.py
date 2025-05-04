@@ -1,11 +1,9 @@
 from typing import Dict, List, Optional, Any
-from .interfaces.voice import VoiceManagerInterface
-import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
 
-class VoiceManager(VoiceManagerInterface):
+class VoiceGenerator:
     def __init__(self):
         self.voices: Dict[str, Dict[str, Any]] = {}  # In-memory store for voices
         
@@ -30,8 +28,7 @@ class VoiceManager(VoiceManagerInterface):
             return None
 
     async def get_voice(self, name: Optional[str] = None, 
-                       voice_id: Optional[str] = None, 
-                       text_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                       voice_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         try:
             if name and name in self.voices:
                 return self.voices[name]
@@ -53,19 +50,8 @@ class VoiceManager(VoiceManagerInterface):
             logger.error(f"Failed to list voices: {str(e)}")
             return []
 
-    async def delete_voice(self, name: str, text_id: Optional[str] = None) -> bool:
-        try:
-            if name in self.voices:
-                self.voices[name]['status'] = 'deleted'
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Failed to delete voice: {str(e)}")
-            return False
-
     async def ensure_voices_exist(self, character_names: List[str],
-                                character_data: List[Dict[str, Any]],
-                                text_id: Optional[str] = None) -> Dict[str, str]:
+                                character_data: List[Dict[str, Any]]) -> Dict[str, str]:
         try:
             result = {}
             for name, data in zip(character_names, character_data):
@@ -78,4 +64,4 @@ class VoiceManager(VoiceManagerInterface):
             return result
         except Exception as e:
             logger.error(f"Failed to ensure voices exist: {str(e)}")
-            return {} 
+            return {}

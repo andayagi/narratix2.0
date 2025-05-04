@@ -1,16 +1,16 @@
 from pydantic import BaseSettings
-from typing import Optional, Dict, Any
+from typing import Optional
 from pathlib import Path
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables or .env file."""
     
     # API Keys
-    anthropic_api_key: str
-    hume_api_key: str
+    anthropic_api_key: str = ""
+    hume_api_key: str = ""
     
     # Database
-    database_url: str = "sqlite:///data/narratix.db"
+    database_url: str = "sqlite:///narratix.db"
     
     # Paths
     output_dir: Path = Path("output")
@@ -32,4 +32,7 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
-        env_file_encoding = "utf-8" 
+        env_file_encoding = "utf-8"
+
+# Create a global settings instance
+settings = Settings()

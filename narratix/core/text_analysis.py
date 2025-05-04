@@ -1,8 +1,8 @@
 from typing import Dict, Optional, Any
 import hashlib
-from ..interfaces.analysis import TextAnalysisInterface
+import asyncio
 
-class TextAnalyzer(TextAnalysisInterface):
+class TextAnalyzer:
     def __init__(self):
         self._cache = {}
         
@@ -32,4 +32,4 @@ class TextAnalyzer(TextAnalysisInterface):
         
     async def save_analysis(self, text_hash: str, analysis_data: Dict[str, Any]) -> str:
         self._cache[text_hash] = analysis_data
-        return text_hash 
+        return text_hash

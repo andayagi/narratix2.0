@@ -1,12 +1,12 @@
-from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any
 from pathlib import Path
-import asyncio
+import logging
 
-class AudioGeneratorInterface(ABC):
-    """Interface for audio generation capabilities."""
+logger = logging.getLogger(__name__)
+
+class AudioGenerator:
+    """Audio generation capabilities."""
     
-    @abstractmethod
     async def generate_audio(self, text: str, voice_id: str, 
                            speed: float = 1.0, 
                            trailing_silence: float = 0.0) -> Optional[bytes]:
@@ -21,9 +21,14 @@ class AudioGeneratorInterface(ABC):
         Returns:
             Audio data as bytes or None if generation failed
         """
-        pass
+        try:
+            # Implementation to be added for actual audio generation
+            logger.info(f"Generating audio for text: '{text[:50]}...' with voice {voice_id}")
+            return b"Mock audio data"  # Placeholder
+        except Exception as e:
+            logger.error(f"Failed to generate audio: {str(e)}")
+            return None
     
-    @abstractmethod
     async def generate_audio_segments(self, 
                                    narrative_elements: List[Dict[str, Any]],
                                    story_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -40,9 +45,25 @@ class AudioGeneratorInterface(ABC):
         Returns:
             List of dictionaries with text, voice, character, and output_filepath
         """
-        pass
+        result = []
+        for elem in narrative_elements:
+            try:
+                voice_id = f"voice_{elem.get('role', 'narrator').lower().replace(' ', '_')}"
+                audio_data = await self.generate_audio(elem.get('text', ''), voice_id)
+                if audio_data:
+                    output_path = f"output/{story_id or 'default'}/{elem.get('segment_id', 'segment')}.mp3"
+                    # Save audio_data to output_path in a real implementation
+                    result.append({
+                        "text": elem.get('text', ''),
+                        "voice": voice_id,
+                        "character": elem.get('role', 'narrator'),
+                        "output_filepath": output_path
+                    })
+            except Exception as e:
+                logger.error(f"Failed to generate audio segment: {str(e)}")
+        
+        return result
     
-    @abstractmethod
     async def combine_audio_segments(self, 
                                    audio_segments: List[Dict[str, Any]],
                                    output_filename: str) -> Optional[str]:
@@ -55,4 +76,11 @@ class AudioGeneratorInterface(ABC):
         Returns:
             Path to the combined audio file or None if combination failed
         """
-        pass 
+        try:
+            # Implementation to be added for actual audio combining
+            output_path = f"output/{output_filename}.mp3"
+            logger.info(f"Combined {len(audio_segments)} segments into {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"Failed to combine audio segments: {str(e)}")
+            return None

@@ -19,9 +19,22 @@ pip install -e .
 
 ## Project Structure
 
-- `api/`: REST API interface
-- `cli/`: Command-line interface
-- `core/`: Core business logic
-- `infrastructure/`: External dependencies
-- `utils/`: Utility functions
-- `tests/`: Test suite 
+- `narratix/`: Main package
+  - `core/`: Core functionality
+    - `text_analysis.py`: Text analysis logic
+    - `voice_generation.py`: Voice generation
+    - `audio_generation.py`: Audio generation
+    - `database.py`: Database models
+  - `utils/`: Utility functions
+    - `config.py`: Configuration settings
+    - `logging_config.py`: Logging setup
+    - `metrics.py`: Performance metrics
+  - `tools/`: CLI tools
+    - `view_logs.py`: Log viewing utility
+    - `resource_monitor.py`: Resource monitoring
+    - `hume_dashboard.py`: Hume AI dashboard
+  - `main.py`: Application entry point
+- `tests/`: Test suite
+- `docs/`: Documentation
+- `scripts/`: Helper scripts
+- `.github/`: GitHub workflows 
