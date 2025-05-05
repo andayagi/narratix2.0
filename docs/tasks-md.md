@@ -18,9 +18,9 @@ This document outlines the planned development tasks for rebuilding Narratix wit
 - [ ] Implement metrics collection for API usage
 
 ### Database
-- [ ] Create SQLite database schema for voice management
-- [ ] Implement database.py with connection pooling
-- [ ] Add voice CRUD operations
+- [x] Create SQLite database schema for voice management
+- [x] Implement database.py with connection pooling
+- [x] Add voice CRUD operations
 - [ ] Add text analysis storage
 
 ## Phase 2: Core Functionality
