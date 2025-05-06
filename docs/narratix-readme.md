@@ -7,7 +7,7 @@ This repository contains the rewritten, streamlined version of Narratix with cle
 
 ## Core Technologies
 - **Backend**: Python with FastAPI
-- **Database**: PostgreSQL with SQLAlchemy ORM
+- **Database**: SQLite local db
 - **AI Services**: 
   - Anthropic Claude API for text analysis
   - Hume AI for voice generation

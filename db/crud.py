@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-import uuid
 from . import models
 from typing import List, Optional, Dict, Any
 
@@ -11,13 +10,13 @@ def create_text(db: Session, content: str, title: Optional[str] = None) -> model
     db.refresh(db_text)
     return db_text
 
-def get_text(db: Session, text_id: uuid.UUID) -> Optional[models.Text]:
+def get_text(db: Session, text_id: int) -> Optional[models.Text]:
     return db.query(models.Text).filter(models.Text.id == text_id).first()
 
 def get_text_by_content(db: Session, content: str) -> Optional[models.Text]:
     return db.query(models.Text).filter(models.Text.content == content).first()
 
-def update_text_analyzed(db: Session, text_id: uuid.UUID, analyzed: bool) -> Optional[models.Text]:
+def update_text_analyzed(db: Session, text_id: int, analyzed: bool) -> Optional[models.Text]:
     db_text = get_text(db, text_id)
     if db_text:
         db_text.analyzed = analyzed
@@ -28,7 +27,7 @@ def update_text_analyzed(db: Session, text_id: uuid.UUID, analyzed: bool) -> Opt
 # Character CRUD
 def create_character(
     db: Session, 
-    text_id: str, 
+    text_id: int, 
     name: str,
     description: Optional[str] = None,
     is_narrator: Optional[bool] = None,
@@ -50,10 +49,10 @@ def create_character(
     db.refresh(db_character)
     return db_character
 
-def get_characters_by_text(db: Session, text_id: uuid.UUID) -> List[models.Character]:
+def get_characters_by_text(db: Session, text_id: int) -> List[models.Character]:
     return db.query(models.Character).filter(models.Character.text_id == text_id).all()
 
-def update_character_voice(db: Session, character_id: uuid.UUID, provider_id: str) -> Optional[models.Character]:
+def update_character_voice(db: Session, character_id: int, provider_id: str) -> Optional[models.Character]:
     db_character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if db_character:
         db_character.provider_id = provider_id
@@ -64,8 +63,8 @@ def update_character_voice(db: Session, character_id: uuid.UUID, provider_id: st
 # TextSegment CRUD
 def create_text_segment(
     db: Session,
-    text_id: str, # Assume ID is string from process_text_analysis
-    character_id: str, # Assume ID is string from character map
+    text_id: int,
+    character_id: int,
     # content: str, # Renamed to text
     text: str,
     sequence: int,
@@ -76,8 +75,8 @@ def create_text_segment(
     audio_file: Optional[str] = None # Keep audio_file for potential future use
 ) -> models.TextSegment:
     db_segment = models.TextSegment(
-        text_id=text_id, # Should be UUID
-        character_id=character_id, # Should be UUID
+        text_id=text_id,
+        character_id=character_id,
         # content=content, # Renamed
         text=text,
         sequence=sequence,
@@ -91,12 +90,12 @@ def create_text_segment(
     db.refresh(db_segment)
     return db_segment
 
-def get_segments_by_text(db: Session, text_id: uuid.UUID) -> List[models.TextSegment]:
+def get_segments_by_text(db: Session, text_id: int) -> List[models.TextSegment]:
     return db.query(models.TextSegment).filter(
         models.TextSegment.text_id == text_id
     ).order_by(models.TextSegment.sequence).all()
 
-def update_segment_audio(db: Session, segment_id: uuid.UUID, audio_file: str) -> Optional[models.TextSegment]:
+def update_segment_audio(db: Session, segment_id: int, audio_file: str) -> Optional[models.TextSegment]:
     db_segment = db.query(models.TextSegment).filter(models.TextSegment.id == segment_id).first()
     if db_segment:
         db_segment.audio_file = audio_file
@@ -109,7 +108,7 @@ def create_log(
     db: Session,
     operation: str,
     status: str,
-    text_id: Optional[uuid.UUID] = None,
+    text_id: Optional[int] = None,
     request: Optional[Dict[str, Any]] = None,
     response: Optional[Dict[str, Any]] = None
 ) -> models.ProcessLog:

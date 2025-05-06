@@ -2,15 +2,12 @@ from anthropic import Anthropic
 import json
 from typing import Dict, List, Tuple, Any, TypedDict
 from sqlalchemy.orm import Session
-import uuid # Add UUID import
-
-from utils.config import ANTHROPIC_API_KEY # Import ANTHROPIC_API_KEY directly
-from utils.logging import get_logger # Import get_logger
+from utils.config import ANTHROPIC_API_KEY
+from utils.logging import get_logger
 from db import crud, models
 
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY) # Use ANTHROPIC_API_KEY directly
+anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# Initialize a logger for API interactions with API logging enabled
 api_logger = get_logger("api.client", is_api=True)
 
 # Define expected structures for clarity
@@ -19,7 +16,7 @@ class CharacterDetail(TypedDict):
     is_narrator: bool
     speaking: bool
     persona_description: str
-    intro_text: str # Renamed from 'text' in the example for clarity
+    intro_text: str 
 
 class NarrativeElement(TypedDict):
     role: str
@@ -397,20 +394,19 @@ def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDeta
         
     return characters, narrative_elements
 
-def process_text_analysis(db: Session, text_id: str, content: str) -> models.Text:
+def process_text_analysis(db: Session, text_id: int, content: str) -> models.Text:
     """
     Process text analysis using the two-phase approach and save results to database.
     """
     try:
-        characters_data, narrative_elements = get_analysis_results(text_id, content)
+        characters_data, narrative_elements = get_analysis_results(str(text_id), content)
     except Exception as e:
         # Log the failure at this higher level too if needed, or just re-raise
-        print(f"Failed to get analysis results for text {text_id}: {e}") # Basic print log
-        # Optionally update text status to failed analysis?
+        print(f"Failed to get analysis results for text {text_id}: {e}") 
         raise
 
     # Get the Text object
-    db_text = crud.get_text(db, uuid.UUID(text_id)) # Convert string ID to UUID
+    db_text = crud.get_text(db, text_id) 
     if not db_text:
         raise ValueError(f"Text with ID {text_id} not found in database.")
 
@@ -426,7 +422,7 @@ def process_text_analysis(db: Session, text_id: str, content: str) -> models.Tex
     for char_detail in characters_data:
         db_character = crud.create_character(
             db=db,
-            text_id=db_text.id, # Use the UUID from db_text
+            text_id=db_text.id, # Use the integer ID
             name=char_detail["name"],
             is_narrator=char_detail.get("is_narrator"),
             speaking=char_detail.get("speaking"),

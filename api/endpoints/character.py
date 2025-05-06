@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
-import uuid
 from pydantic import BaseModel
 
 from db.database import get_db
@@ -13,15 +12,15 @@ router = APIRouter(
 )
 
 class CharacterResponse(BaseModel):
-    id: str
-    text_id: str
+    id: int
+    text_id: int
     name: str
     description: Optional[str]
     provider_id: Optional[str]
 
 @router.get("/text/{text_id}", response_model=List[CharacterResponse])
 async def get_characters_by_text(
-    text_id: str,
+    text_id: int,
     db: Session = Depends(get_db)
 ):
     """Get all characters for a text"""
@@ -32,8 +31,8 @@ async def get_characters_by_text(
     characters = crud.get_characters_by_text(db, text_id)
     
     return [{
-        "id": str(char.id),
-        "text_id": str(char.text_id),
+        "id": char.id,
+        "text_id": char.text_id,
         "name": char.name,
         "description": char.description,
         "provider_id": char.provider_id
@@ -41,7 +40,7 @@ async def get_characters_by_text(
 
 @router.put("/{character_id}", response_model=CharacterResponse)
 async def update_character(
-    character_id: str,
+    character_id: int,
     character_data: Dict[str, Any],
     db: Session = Depends(get_db)
 ):
@@ -62,8 +61,8 @@ async def update_character(
     db.refresh(db_character)
     
     return {
-        "id": str(db_character.id),
-        "text_id": str(db_character.text_id),
+        "id": db_character.id,
+        "text_id": db_character.text_id,
         "name": db_character.name,
         "description": db_character.description,
         "provider_id": db_character.provider_id

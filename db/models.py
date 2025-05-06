@@ -1,19 +1,17 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text as SQLAlchemyText, DateTime, JSON, Float, UUID
-# from sqlalchemy.dialects.postgresql import UUID # Removed for SQLite compatibility
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text as SQLAlchemyText, DateTime, JSON, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-import uuid
 
 from .database import Base
 
 class Text(Base):
     __tablename__ = "texts"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     content = Column(SQLAlchemyText, nullable=False)
     title = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    analyzed = Column(Boolean, default=False)
+    analyzed = Column(Boolean, default=False, nullable=False)
     
     characters = relationship("Character", back_populates="text", cascade="all, delete-orphan")
     segments = relationship("TextSegment", back_populates="text_obj", cascade="all, delete-orphan")
@@ -22,8 +20,8 @@ class Text(Base):
 class Character(Base):
     __tablename__ = "characters"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    text_id = Column(UUID(as_uuid=True), ForeignKey("texts.id"))
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text_id = Column(Integer, ForeignKey("texts.id"))
     name = Column(String, nullable=False)
     description = Column(SQLAlchemyText, nullable=True)
     provider_id = Column(String, nullable=True)
@@ -41,9 +39,9 @@ class Character(Base):
 class TextSegment(Base):
     __tablename__ = "text_segments"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    text_id = Column(UUID(as_uuid=True), ForeignKey("texts.id"))
-    character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"))
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text_id = Column(Integer, ForeignKey("texts.id"))
+    character_id = Column(Integer, ForeignKey("characters.id"))
     text = Column(SQLAlchemyText, nullable=False)
     sequence = Column(Integer, nullable=False)
     audio_file = Column(String, nullable=True)
@@ -60,8 +58,8 @@ class TextSegment(Base):
 class ProcessLog(Base):
     __tablename__ = "process_logs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    text_id = Column(UUID(as_uuid=True), ForeignKey("texts.id"), nullable=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text_id = Column(Integer, ForeignKey("texts.id"), nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     operation = Column(String, nullable=False)
     request = Column(JSON, nullable=True)

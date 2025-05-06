@@ -1,7 +1,6 @@
 import os
 import requests
 import json
-import uuid
 import time
 from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
@@ -18,7 +17,7 @@ HUME_TTS_API_URL = "https://api.hume.ai/v0/tts/generate"
 
 def generate_segment_audio(
     db: Session,
-    segment_id: uuid.UUID,
+    segment_id: int,
     segment_content: str,
     voice_id: str
 ) -> str:
@@ -93,7 +92,7 @@ def generate_segment_audio(
         })
         raise
 
-def generate_text_audio(db: Session, text_id: uuid.UUID) -> List[str]:
+def generate_text_audio(db: Session, text_id: int) -> List[str]:
     """
     Generate audio for all segments of a text
     
@@ -117,7 +116,7 @@ def generate_text_audio(db: Session, text_id: uuid.UUID) -> List[str]:
                 audio_file = generate_segment_audio(
                     db,
                     segment.id,
-                    segment.content,
+                    segment.text,
                     voice_id
                 )
                 audio_files.append(audio_file)
@@ -125,31 +124,3 @@ def generate_text_audio(db: Session, text_id: uuid.UUID) -> List[str]:
             audio_files.append(segment.audio_file)
     
     return audio_files
-
-def combine_audio_files(audio_files: List[str]) -> str:
-    """
-    Combine multiple audio files into a single file
-    
-    Returns:
-        Path to the combined audio file
-    """
-    # In a real implementation, use a library like pydub
-    # For MVP, we'll implement a simple solution
-    
-    if not audio_files:
-        return None
-    
-    if len(audio_files) == 1:
-        return audio_files[0]
-    
-    # For MVP, just return the list of files
-    # In a real implementation, we would combine them
-    combined_file_name = f"combined_{uuid.uuid4()}.mp3"
-    combined_file_path = os.path.join(settings.AUDIO_STORAGE_PATH, combined_file_name)
-    
-    # TODO: Implement actual audio combining
-    # For now, just create a placeholder file with info
-    with open(combined_file_path, "w") as f:
-        f.write(f"Combined audio file with segments: {','.join(audio_files)}")
-    
-    return combined_file_path

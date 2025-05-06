@@ -1,6 +1,5 @@
 import requests
 import json
-import uuid
 import time
 from typing import Dict, Any
 from sqlalchemy.orm import Session
@@ -16,7 +15,7 @@ HUME_VOICE_API_URL = "https://api.hume.ai/v0/voice/creator"
 
 def generate_character_voice(
     db: Session, 
-    character_id: uuid.UUID, 
+    character_id: int, 
     character_name: str, 
     character_description: str
 ) -> str:
@@ -91,7 +90,7 @@ def generate_character_voice(
         })
         raise
 
-def ensure_character_voices(db: Session, text_id: uuid.UUID) -> Dict[uuid.UUID, str]:
+def ensure_character_voices(db: Session, text_id: int) -> Dict[int, str]:
     """
     Ensure all characters for a text have voices.
     Generate voices for characters that don't have one.

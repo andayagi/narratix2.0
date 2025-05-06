@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 import os
-import uuid
 
 from db.database import get_db
 from db import crud, models
@@ -16,7 +15,7 @@ router = APIRouter(
 
 @router.post("/text/{text_id}/generate", response_model=Dict[str, Any])
 async def generate_audio_for_text(
-    text_id: str,
+    text_id: int,
     db: Session = Depends(get_db)
 ):
     """Generate audio for all segments of a text"""
@@ -42,7 +41,7 @@ async def generate_audio_for_text(
 
 @router.get("/text/{text_id}", response_model=Dict[str, Any])
 async def get_audio_for_text(
-    text_id: str,
+    text_id: int,
     db: Session = Depends(get_db)
 ):
     """Get audio information for a text"""

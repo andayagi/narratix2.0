@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
-import uuid
 from pydantic import BaseModel
 
 from db.database import get_db
@@ -18,7 +17,7 @@ class TextCreate(BaseModel):
     title: Optional[str] = None
 
 class TextResponse(BaseModel):
-    id: str
+    id: int
     content: str
     title: Optional[str]
     analyzed: bool
@@ -39,7 +38,7 @@ async def create_text(
     existing_text = crud.get_text_by_content(db, content)
     if existing_text:
         return {
-            "id": str(existing_text.id),
+            "id": existing_text.id,
             "content": existing_text.content,
             "title": existing_text.title,
             "analyzed": existing_text.analyzed
@@ -49,7 +48,7 @@ async def create_text(
     db_text = crud.create_text(db, content, title)
     
     return {
-        "id": str(db_text.id),
+        "id": db_text.id,
         "content": db_text.content,
         "title": db_text.title,
         "analyzed": db_text.analyzed
@@ -57,21 +56,16 @@ async def create_text(
 
 @router.get("/{text_id}", response_model=TextResponse)
 async def get_text(
-    text_id: str,
+    text_id: int,
     db: Session = Depends(get_db)
 ):
     """Get a text by ID"""
-    try:
-        text_uuid = uuid.UUID(text_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid UUID format")
-        
-    db_text = crud.get_text(db, text_uuid)
+    db_text = crud.get_text(db, text_id)
     if not db_text:
         raise HTTPException(status_code=404, detail="Text not found")
     
     return {
-        "id": str(db_text.id),
+        "id": db_text.id,
         "content": db_text.content,
         "title": db_text.title,
         "analyzed": db_text.analyzed
@@ -85,7 +79,7 @@ async def list_texts(
     texts = db.query(models.Text).all()
     
     return [{
-        "id": str(text.id),
+        "id": text.id,
         "content": text.content,
         "title": text.title,
         "analyzed": text.analyzed
@@ -93,37 +87,32 @@ async def list_texts(
 
 @router.put("/{text_id}/analyze", response_model=TextResponse)
 async def analyze_text_endpoint(
-    text_id: str,
+    text_id: int,
     force: bool = False,
     db: Session = Depends(get_db)
 ):
     """Analyze a text to extract characters and segments"""
-    try:
-        text_uuid = uuid.UUID(text_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid UUID format")
-        
-    db_text = crud.get_text(db, text_uuid)
+    db_text = crud.get_text(db, text_id)
     if not db_text:
         raise HTTPException(status_code=404, detail="Text not found")
     
     # Check if already analyzed and not forcing reanalysis
     if db_text.analyzed and not force:
         return {
-            "id": str(db_text.id),
+            "id": db_text.id,
             "content": db_text.content,
             "title": db_text.title,
             "analyzed": db_text.analyzed
         }
     
     # Analyze text
-    text_analysis.process_text_analysis(db, text_uuid, db_text.content)
+    text_analysis.process_text_analysis(db, text_id, db_text.content)
     
     # Return updated text
-    db_text = crud.get_text(db, text_uuid)
+    db_text = crud.get_text(db, text_id)
     
     return {
-        "id": str(db_text.id),
+        "id": db_text.id,
         "content": db_text.content,
         "title": db_text.title,
         "analyzed": db_text.analyzed

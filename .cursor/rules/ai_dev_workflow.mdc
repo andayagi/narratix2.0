@@ -5,26 +5,23 @@ alwaysApply: false
 ---
 Per development task given follow these steps - ONE STEP AT A TIME then circle back to chat:
 1.  **Requirement Analysis & Planning:** Before coding, analyze the request, look at relevant files and docs, stay true to it's objective and outline requirements, and propose an implementation plan. ALWAYS be lean, plan ONLY what's needed for the task **Confirm this plan with the user before proceeding.**
-2.  **Test Design:** Following TDD principles, write tests first (@testing.mdc):
-   - Write unit tests that define the expected behavior
+2.  **Integration Test Design:** Design integration tests that verify the feature works end-to-end:
+   - Define test scenarios that cover the main user flows
    - Include edge cases and error scenarios
    - Present test cases to user for review
-   - Tests should fail initially (Red phase of Red-Green-Refactor)
-3.  **Code Generation:** Implement the minimum code needed to make tests pass (Green phase):
-   - Follow project standards (@architecture.mdc, @tech_stack.mdc)
-   - Write only what's necessary to pass the tests
+3.  **Code Generation:** Implement the minimum code needed:
+   - Follow project standards
+   - Write only what's necessary for the feature
    - Keep code clean and simple
-   - Refactor if needed while keeping tests green
-4.  **Integration:** Integrate the tested code into the existing codebase.
-5.  **Documentation:** Generate necessary documentation (@documentation.mdc).
-6.  **Consistency Principle:** Go over all files to ensure consistency with the new code. Ensure alignment across all relevant files, including requirements (@docs/requirements/week_1_tasks.md), the MVP plan (@docs/narratix_mvp_plan.md), and other defined rules.
-7.  **Review:** Present the completed work (code, tests, docs) for final user review.
+   - Refactor if needed
+4.  **Integration:** Integrate the code into the existing codebase.
+5.  **Documentation:** Generate necessary documentation.
+6.  **Consistency Principle:** Go over entire codebase to ensure consistency with the new code. Ensure alignment across all relevant files, scripts, modules and methods.
+7.  **Review:** Verify with user test results are correct.
 8.  **Git/GitHub:** After user approval, prepare Git commits and push:
    - Write clear, concise commit messages describing the changes
    - Group related changes in logical commits
-   - Ensure proper branch management according to project conventions
    - Push changes to the appropriate remote repository
-   - Create pull requests if required by the workflow
 
 **End thread:** each thread\conversation will handle only one task, never continue to a new task. 
 
