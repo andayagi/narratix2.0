@@ -37,3 +37,6 @@ ENV/
 logs/
 audio_files/
 .DS_Store
+*.db
+*.sqlite
+*.sqlite3

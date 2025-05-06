@@ -54,7 +54,8 @@ PROJECT_STRUCTURE = {
 
 # Sample .env file content
 ENV_CONTENT = """# Database
-DATABASE_URL=postgresql://user:password@localhost/narratix
+# Use SQLite by default
+DATABASE_URL=sqlite:///./narratix.db
 
 # API Keys
 ANTHROPIC_API_KEY=your_anthropic_api_key
@@ -119,7 +120,7 @@ pydantic==2.6.1
 python-dotenv==1.0.1
 anthropic==0.21.0
 httpx==0.27.0
-psycopg2-binary==2.9.9
+# psycopg2-binary==2.9.9 # Removed for SQLite
 python-multipart==0.0.9
 uuid==1.30
 pytest==7.4.3

@@ -126,17 +126,18 @@ ProcessLog
 
 ### Required Environment Variables
 ```
-DATABASE_URL=postgresql://user:password@localhost/narratix
+DATABASE_URL=sqlite:///./narratix.db
 ANTHROPIC_API_KEY=your_anthropic_api_key
 HUME_API_KEY=your_hume_api_key
 ```
 
 ### Development Setup
-1. Create a virtual environment
-2. Install dependencies: `pip install -r requirements.txt`
-3. Set up PostgreSQL database
-4. Run migrations: `alembic upgrade head`
-5. Start the API: `uvicorn api.main:app --reload`
+1. Create a virtual environment (`python -m venv venv` or `conda create -n narratix python=3.10`)
+2. Activate the environment (`source venv/bin/activate` or `conda activate narratix`)
+3. Install dependencies: `pip install -r requirements.txt`
+4. The SQLite database (`narratix.db`) will be created automatically in the project root on first run.
+5. Run database migrations: `alembic upgrade head`
+6. Start the API: `uvicorn api.main:app --reload`
 
 ## Implementation Guidelines
 

@@ -1,5 +1,5 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text as SQLAlchemyText, DateTime, JSON, Float
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text as SQLAlchemyText, DateTime, JSON, Float, UUID
+# from sqlalchemy.dialects.postgresql import UUID # Removed for SQLite compatibility
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
