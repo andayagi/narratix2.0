@@ -11,6 +11,7 @@ class Text(Base):
     content = Column(SQLAlchemyText, nullable=False)
     title = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     analyzed = Column(Boolean, default=False, nullable=False)
     
     characters = relationship("Character", back_populates="text", cascade="all, delete-orphan")

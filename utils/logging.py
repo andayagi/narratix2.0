@@ -83,28 +83,34 @@ class HumanReadableFormatter(logging.Formatter):
         if hasattr(record, 'http_request'):
             req = record.http_request
             formatted += f"\nRequest: {req.get('method')} {req.get('url')}"
+            if req.get('headers'):
+                formatted += "\nRequest Headers:"
+                for k, v in req.get('headers', {}).items():
+                    if k.lower() in ['authorization', 'x-api-key', 'api-key']:
+                        v = '[REDACTED]'
+                    formatted += f"\n  {k}: {v}"
+                    
             if 'body' in req and req['body']:
-                # Limit body size to avoid overly long logs
-                body_str = str(req['body'])
-                if len(body_str) > 200:
-                    body_str = body_str[:200] + "..."
-                formatted += f"\nRequest Body: {body_str}"
+                formatted += "\nRequest Body:"
+                formatted += self._format_body(req['body'])
         
         # Add HTTP response info if present
         if hasattr(record, 'http_response'):
             resp = record.http_response
             formatted += f"\nResponse Status: {resp.get('status_code')}"
+            if resp.get('headers'):
+                formatted += "\nResponse Headers:"
+                for k, v in resp.get('headers', {}).items():
+                    formatted += f"\n  {k}: {v}"
+                    
             if 'body' in resp and resp['body']:
-                # Limit body size to avoid overly long logs
-                body_str = str(resp['body'])
-                if len(body_str) > 200:
-                    body_str = body_str[:200] + "..."
-                formatted += f"\nResponse Body: {body_str}"
+                formatted += "\nResponse Body:"
+                formatted += self._format_body(resp['body'])
         
         # Add context data if present (selectively)
         if hasattr(record, 'context') and record.context:
             # Only show important context keys to avoid clutter
-            important_keys = ['session_id', 'user_id', 'operation']
+            important_keys = ['session_id', 'user_id', 'operation', 'request_id']
             context_items = []
             for key in important_keys:
                 if key in record.context:
@@ -114,6 +120,97 @@ class HumanReadableFormatter(logging.Formatter):
                 formatted += f"\nContext: {', '.join(context_items)}"
                 
         return formatted
+    
+    def _format_body(self, body) -> str:
+        """Format the body content in a readable way."""
+        # Handle different body types
+        if isinstance(body, (dict, list)):
+            try:
+                # Pretty print JSON with indentation
+                return '\n' + self._pretty_print_json(body)
+            except (TypeError, ValueError):
+                pass
+                
+        # For non-JSON or if pretty printing fails
+        body_str = str(body)
+        if len(body_str) > 1000:
+            # For very long strings, truncate with summary
+            return f"\n  (truncated {len(body_str)} chars) {body_str[:1000]}..."
+        else:
+            # Indent each line to make it more readable
+            return '\n  ' + body_str.replace('\n', '\n  ')
+    
+    def _pretty_print_json(self, data, max_depth=3, current_depth=0, indent_size=2):
+        """
+        Pretty print JSON with controlled depth to avoid too much output.
+        For nested objects beyond max_depth, shows a summary instead.
+        """
+        if current_depth >= max_depth:
+            # Summarize deeply nested objects
+            if isinstance(data, dict):
+                return f"{{... {len(data)} keys ...}}"
+            elif isinstance(data, list):
+                return f"[... {len(data)} items ...]"
+            else:
+                return str(data)
+                
+        if isinstance(data, dict):
+            if not data:
+                return "{}"
+                
+            result = "{"
+            indent = " " * indent_size * (current_depth + 1)
+            items = []
+            
+            for i, (key, value) in enumerate(data.items()):
+                # Limit number of items for large dictionaries
+                if i >= 10 and len(data) > 15:
+                    items.append(f"\n{indent}... {len(data) - i} more items ...")
+                    break
+                    
+                value_str = self._pretty_print_json(value, max_depth, current_depth + 1, indent_size)
+                items.append(f"\n{indent}\"{key}\": {value_str}")
+                
+            result += ", ".join(items)
+            result += f"\n{' ' * indent_size * current_depth}}}"
+            return result
+            
+        elif isinstance(data, list):
+            if not data:
+                return "[]"
+                
+            result = "["
+            indent = " " * indent_size * (current_depth + 1)
+            items = []
+            
+            for i, value in enumerate(data):
+                # Limit number of items for large lists
+                if i >= 5 and len(data) > 10:
+                    items.append(f"\n{indent}... {len(data) - i} more items ...")
+                    break
+                    
+                value_str = self._pretty_print_json(value, max_depth, current_depth + 1, indent_size)
+                items.append(f"\n{indent}{value_str}")
+                
+            result += ", ".join(items)
+            result += f"\n{' ' * indent_size * current_depth}]"
+            return result
+            
+        elif isinstance(data, str):
+            # For strings, handle escaping and wrapping in quotes
+            if len(data) > 100:
+                return f"\"{data[:100]}...\""
+            return f"\"{data}\""
+            
+        elif isinstance(data, bool):
+            return "true" if data else "false"
+            
+        elif data is None:
+            return "null"
+            
+        else:
+            # Just convert numbers and other primitives to string
+            return str(data)
 
 class APILogger(logging.LoggerAdapter):
     """Logger adapter specifically for API calls with request/response tracking."""

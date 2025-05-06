@@ -2,9 +2,11 @@ from anthropic import Anthropic
 import json
 from typing import Dict, List, Tuple, Any, TypedDict
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 from utils.config import ANTHROPIC_API_KEY
 from utils.logging import get_logger
 from db import crud, models
+from datetime import datetime
 
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -132,8 +134,7 @@ Provide your analysis in the following JSON format:
 
 Instructions:
 1. Identify all characters in the text
-2. If the text uses third-person narration, add a "Narrator" record
-3. IMPORTANT: For first-person narratives, do not create both a "protagonist" and a separate "Narrator" role - they are the same character.
+2. Add a "Narrator" record if there's a third person narrator
 4. For each character add if it speaks in the text speaking=true\\\\false
 5. For each entry describe in one short sentence the voice for voiceover - [AGE GROUP] [MALE or FEMALE], American accent, [CORE VOCAL QUALITY + INTENSITY LEVEL] voice, [SPEAKING PATTERN], like [PRECISE CHARACTER ARCHETYPE] [PERFORMING CHARACTERISTIC ACTION WITH EMOTIONAL SUBTEXT]. words like young and youthful should be used only for children characters. 
 6. For each entry describe how the character would introduce itself to others in the book, if third person narrator then an introduction to the book
@@ -409,12 +410,19 @@ def process_text_analysis(db: Session, text_id: int, content: str) -> models.Tex
     db_text = crud.get_text(db, text_id) 
     if not db_text:
         raise ValueError(f"Text with ID {text_id} not found in database.")
+    
+    # Clear existing characters and segments (if any)
+    # First delete segments, then characters to avoid foreign key issues
+    crud.delete_segments_by_text(db, text_id)
+    db.query(models.Character).filter(models.Character.text_id == text_id).delete(synchronize_session=False)
+    db.commit()
 
-    # Update text as analyzed
-    db_text = crud.update_text_analyzed(db, db_text.id, analyzed=True)
-    if not db_text:
-        # This shouldn't happen if get_text succeeded, but defensive check
-        raise ValueError(f"Failed to update text analysis status for ID {text_id}.")
+    # Update text as analyzed and update last_updated
+    db_text.analyzed = True
+    db_text.last_updated = datetime.now()  # Explicitly set the timestamp
+    db.add(db_text)
+    db.commit()
+    db.refresh(db_text)
 
     # Create characters in DB
     character_map = {}  # Map character names to DB Character objects
@@ -422,7 +430,7 @@ def process_text_analysis(db: Session, text_id: int, content: str) -> models.Tex
     for char_detail in characters_data:
         db_character = crud.create_character(
             db=db,
-            text_id=db_text.id, # Use the integer ID
+            text_id=db_text.id, 
             name=char_detail["name"],
             is_narrator=char_detail.get("is_narrator"),
             speaking=char_detail.get("speaking"),

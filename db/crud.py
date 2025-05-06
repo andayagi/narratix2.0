@@ -95,6 +95,18 @@ def get_segments_by_text(db: Session, text_id: int) -> List[models.TextSegment]:
         models.TextSegment.text_id == text_id
     ).order_by(models.TextSegment.sequence).all()
 
+def delete_segments_by_text(db: Session, text_id: int) -> int:
+    """Delete all text segments associated with a text_id
+    
+    Returns:
+        int: Number of deleted segments
+    """
+    result = db.query(models.TextSegment).filter(
+        models.TextSegment.text_id == text_id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return result
+
 def update_segment_audio(db: Session, segment_id: int, audio_file: str) -> Optional[models.TextSegment]:
     db_segment = db.query(models.TextSegment).filter(models.TextSegment.id == segment_id).first()
     if db_segment:
