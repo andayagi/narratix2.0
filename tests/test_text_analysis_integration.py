@@ -15,6 +15,7 @@ import uuid
 from db import models, crud
 from services.text_analysis import process_text_analysis
 from db.database import SessionLocal, engine, Base, DATABASE_URL # Or however you get your test session
+from utils.config import setup_run_logging
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
@@ -23,7 +24,7 @@ Base.metadata.create_all(bind=engine)
 # You might use pytest fixtures for this (e.g., setting up a test DB)
 
 # Load test content from fixture file using absolute path
-fixture_file = '/Users/anatburg/Narratix2.0/tests/fixtures/text_example'
+fixture_file = '/Users/anatburg/Narratix2.0/tests/fixtures/text_analysis_example'
 with open(fixture_file, 'r', encoding='utf-8') as f:
     BASE_TEST_TEXT_CONTENT = f.read()
 
@@ -33,6 +34,9 @@ def test_full_text_analysis_pipeline():
     Tests the full text analysis pipeline from text input to DB records,
     using the real Anthropic API. Requires ANTHROPIC_API_KEY environment variable.
     """
+    # Setup a single logging session for all operations in this test
+    session_id = setup_run_logging("test_session")
+    
     print(f"DATABASE_URL used in test: {DATABASE_URL}")
     print(f"Engine URL used in test: {engine.url}")
     

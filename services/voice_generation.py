@@ -1,117 +1,91 @@
-import requests
-import json
+import os
 import time
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
-from utils.config import settings
+from utils.config import Settings
 from utils.logging import get_logger
-from db import crud, models
+from db import crud
 
-api_logger = get_logger("api.client", is_api=True)
+# Import the Hume SDK client
+from hume import AsyncHumeClient
+from hume.tts import PostedUtterance
 
-# Hume AI base URL for voice creation
-HUME_VOICE_API_URL = "https://api.hume.ai/v0/voice/creator"
+# Initialize logger
+logger = get_logger(__name__)
 
-def generate_character_voice(
+# Maximum number of retries for API calls
+MAX_RETRIES = 3
+# Delay between retries in seconds
+RETRY_DELAY = 1
+
+async def generate_character_voice(
     db: Session, 
     character_id: int, 
     character_name: str, 
-    character_description: str
+    character_description: str,
+    character_intro_text: str,
+    text_id: int
 ) -> str:
     """
-    Generate a voice for a character using Hume AI
-    
-    Returns:
-        provider_id: Hume AI voice ID
+    Generate and save a voice for a character using Hume AI.
     """
-    # Create a voice description based on character
-    voice_description = f"Voice for character: {character_name}. {character_description}"
+    # Ensure we're using the latest API key from environment
+    current_settings = Settings()
+    api_key = os.getenv("HUME_API_KEY") or current_settings.HUME_API_KEY
     
-    # Prepare request for Hume AI
-    headers = {
-        "Content-Type": "application/json",
-        "X-API-Key": settings.HUME_API_KEY
-    }
+    # Initialize the Hume SDK client
+    hume_client = AsyncHumeClient(api_key=api_key)
     
-    payload = {
-        "name": f"Narratix-{character_name}",
-        "description": voice_description[:200],  # Limit description length
-        "gender": "neutral",  # Default to neutral, can be improved with character analysis
-        "use_case": "storytelling"
-    }
-    
-    try:
-        # Log API request
-        api_logger.log_request(
-            method="POST",
-            url=HUME_VOICE_API_URL,
-            headers=headers,
-            body=payload
-        )
-        
-        # Call Hume AI API to create voice
-        response = requests.post(
-            HUME_VOICE_API_URL,
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status()
-        
-        response_data = response.json()
-        voice_id = response_data.get("voice_id")
-        
-        # Log successful response
-        api_logger.log_response(
-            status_code=response.status_code,
-            headers=dict(response.headers),
-            body=response_data
-        )
-        
-        # Update character with voice ID
-        crud.update_character_voice(db, character_id, voice_id)
-        
-        return voice_id
-        
-    except Exception as e:
-        # Log error response if available
-        if 'response' in locals():
-            api_logger.log_response(
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                body=response.text
+    retry_count = 0
+    while retry_count < MAX_RETRIES:
+        try:
+            # Step 1: Generate speech to obtain generation_id
+            tts_response = await hume_client.tts.synthesize_json(
+                utterances=[
+                    PostedUtterance(
+                        text=character_intro_text,
+                        description=character_description[:200]
+                    )
+                ]
             )
-        
-        api_logger.error(f"Character voice generation failed: {str(e)}", extra={
-            "operation": "voice_generation",
-            "character_id": str(character_id),
-            "error": str(e),
-            "status": "error"
-        })
-        raise
+            
+            # Validate response structure before accessing indices
+            if not tts_response.generations:
+                raise ValueError("Missing 'generations' in API response")
+                
+            generation_id = tts_response.generations[0].generation_id
 
-def ensure_character_voices(db: Session, text_id: int) -> Dict[int, str]:
-    """
-    Ensure all characters for a text have voices.
-    Generate voices for characters that don't have one.
-    
-    Returns:
-        Dict mapping character_id to provider_id
-    """
-    characters = crud.get_characters_by_text(db, text_id)
-    voice_map = {}
-    
-    for character in characters:
-        if not character.provider_id:
-            # Generate voice if not already done
-            voice_id = generate_character_voice(
-                db, 
-                character.id, 
-                character.name, 
-                character.description or ""
+            # Step 2: Save the generated voice with naming format [name]_[text_id]
+            voice_name = f"{character_name}_{text_id}"
+            
+            save_response = await hume_client.tts.voices.create(
+                name=voice_name,
+                generation_id=generation_id
             )
-            voice_map[character.id] = voice_id
-        else:
-            voice_map[character.id] = character.provider_id
-    
-    return voice_map
+            
+            # Get the voice ID from the response
+            voice_id = save_response.id
+
+            # Save provider_id and provider to the database
+            crud.update_character_voice(db, character_id, voice_id, provider="HUME")
+            return voice_id
+            
+        except Exception as e:
+            retry_count += 1
+            # Log the attempt
+            logger.warning(f"Voice generation attempt {retry_count} failed: {str(e)}")
+            
+            if retry_count >= MAX_RETRIES:
+                # Log error with context after all retries have failed
+                error_context = {
+                    "operation": "voice_generation", 
+                    "character_id": character_id, 
+                    "text_id": text_id,
+                    "attempts": retry_count
+                }
+                logger.error(f"Character voice generation failed after {retry_count} attempts: {str(e)}", exc_info=True)
+                raise
+                
+            # Wait before retrying
+            time.sleep(RETRY_DELAY)

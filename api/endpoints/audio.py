@@ -30,13 +30,11 @@ async def generate_audio_for_text(
     # Generate audio
     audio_files = audio_generation.generate_text_audio(db, text_id)
     
-    # Combine audio files
-    combined_audio = audio_generation.combine_audio_files(audio_files)
-    
+    # Return the audio file path directly since Hume already returns combined audio
     return {
         "text_id": text_id,
-        "audio_file": combined_audio,
-        "segments": audio_files
+        "audio_file": audio_files,
+        "segments": [audio_files] if audio_files else []
     }
 
 @router.get("/text/{text_id}", response_model=Dict[str, Any])

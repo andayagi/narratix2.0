@@ -40,3 +40,8 @@ audio_files/
 *.db
 *.sqlite
 *.sqlite3
+
+docs/hume_docs 
+
+# One off tests
+tests_one_offs/

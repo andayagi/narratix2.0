@@ -52,13 +52,18 @@ def create_character(
 def get_characters_by_text(db: Session, text_id: int) -> List[models.Character]:
     return db.query(models.Character).filter(models.Character.text_id == text_id).all()
 
-def update_character_voice(db: Session, character_id: int, provider_id: str) -> Optional[models.Character]:
+def update_character_voice(db: Session, character_id: int, provider_id: str, provider: str = "HUME") -> Optional[models.Character]:
     db_character = db.query(models.Character).filter(models.Character.id == character_id).first()
     if db_character:
         db_character.provider_id = provider_id
+        db_character.provider = provider
         db.commit()
         db.refresh(db_character)
     return db_character
+
+def get_character(db: Session, character_id: int) -> Optional[models.Character]:
+    """Get a character by ID"""
+    return db.query(models.Character).filter(models.Character.id == character_id).first()
 
 # TextSegment CRUD
 def create_text_segment(

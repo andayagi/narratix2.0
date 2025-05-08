@@ -3,14 +3,16 @@ import json
 from typing import Dict, List, Tuple, Any, TypedDict
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
-from utils.config import ANTHROPIC_API_KEY
+from utils.config import settings
 from utils.logging import get_logger
 from db import crud, models
 from datetime import datetime
 
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+# Initialize Anthropic client which will use our patched HTTP transport
+anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-api_logger = get_logger("api.client", is_api=True)
+# Initialize regular logger
+logger = get_logger(__name__)
 
 # Define expected structures for clarity
 class CharacterDetail(TypedDict):
@@ -136,7 +138,7 @@ Instructions:
 1. Identify all characters in the text
 2. Add a "Narrator" record if there's a third person narrator
 4. For each character add if it speaks in the text speaking=true\\\\false
-5. For each entry describe in one short sentence the voice for voiceover - [AGE GROUP] [MALE or FEMALE], American accent, [CORE VOCAL QUALITY + INTENSITY LEVEL] voice, [SPEAKING PATTERN], like [PRECISE CHARACTER ARCHETYPE] [PERFORMING CHARACTERISTIC ACTION WITH EMOTIONAL SUBTEXT]. words like young and youthful should be used only for children characters. 
+5. For each entry describe in one short sentence the voice for voiceover - [AGE GROUP] [MALE or FEMALE], no accent, [CORE VOCAL QUALITY + INTENSITY LEVEL] voice, [SPEAKING PATTERN], like [PRECISE CHARACTER ARCHETYPE] [PERFORMING CHARACTERISTIC ACTION WITH EMOTIONAL SUBTEXT]. words like young and youthful should be used only for children characters. 
 6. For each entry describe how the character would introduce itself to others in the book, if third person narrator then an introduction to the book
 
 
@@ -144,6 +146,13 @@ Now analyze this text:
 {text_content}
 """
 
+    # Log full Anthropics API request
+    logger.info("Anthropic API Request", extra={"anthropic_request": {
+        "model": "claude-3-5-haiku-20241022",
+        "max_tokens": 2000,
+        "temperature": 1,
+        "messages": [{"role": "user", "content": prompt}]
+    }})
     response = anthropic_client.messages.create(
         model="claude-3-5-haiku-20241022",
         max_tokens=2000,
@@ -157,6 +166,8 @@ Now analyze this text:
     )
     
     response_content = response.content[0].text
+    # Log full Anthropics API response
+    logger.info("Anthropic API Response", extra={"anthropic_response": response_content})
     analysis = _extract_json_from_response(response_content)
     
     # Map the API's 'text' field to our internal 'intro_text'
@@ -313,6 +324,13 @@ here's the roles_names_json and text:
 </text>
 """
     
+    # Log full Anthropics API segmentation request
+    logger.info("Anthropic API Segmentation Request", extra={"anthropic_request": {
+        "model": "claude-3-7-sonnet-20250219",
+        "max_tokens": 4096,
+        "temperature": 1,
+        "messages": [{"role": "user", "content": prompt}]
+    }})
     response = anthropic_client.messages.create(
         model="claude-3-7-sonnet-20250219", 
         max_tokens=4096,
@@ -326,6 +344,8 @@ here's the roles_names_json and text:
     )
     
     response_content = response.content[0].text
+    # Log full Anthropics API segmentation response
+    logger.info("Anthropic API Segmentation Response", extra={"anthropic_response": response_content})
     analysis = _extract_json_from_response(response_content)
     
     return analysis.get("narrative_elements", [])
@@ -336,61 +356,30 @@ def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDeta
     Orchestrates the two-phase text analysis using Anthropic API calls.
     Returns detailed character info and narrative elements.
     """
-    request_data_p1 = {"text_id": text_id, "content_length": len(content)}
+    # Add operation context to logger
+    logger = get_logger(__name__, {"text_id": text_id, "operation": "text_analysis"})
     
     try:
         # Phase 1: Character Identification
-        api_logger.log_request(
-            method="POST",
-            url="https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
-            body={"text": content, "phase": "character_identification"}
-        )
-        
+        logger.info(f"Starting character identification for text {text_id} (length: {len(content)})")
         characters = analyze_text_phase1_characters(content)
-        
-        api_logger.log_response(
-            status_code=200,
-            body={"characters_count": len(characters)}
-        )
+        logger.info(f"Found {len(characters)} characters in text {text_id}")
         
     except Exception as e:
-        api_logger.error(f"Error in text_analysis_phase1_characters: {e}", extra={
-            "operation": "text_analysis_phase1_characters",
-            "response_data": {"error": str(e)},
-            "status": "error",
-            "text_id": text_id
-        })
+        logger.error(f"Error in text_analysis_phase1_characters: {e}", exc_info=True)
         raise ValueError(f"Error in Phase 1 (Character Identification): {e}") from e
         
     if not characters:
          raise ValueError("Phase 1 did not return any characters.")
 
     # Phase 2: Segmentation
-    request_data_p2 = {"text_id": text_id, "characters_count": len(characters)}
-    
     try:
-        api_logger.log_request(
-            method="POST",
-            url="https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
-            body={"text": content, "characters": characters, "phase": "segmentation"}
-        )
-        
+        logger.info(f"Starting segmentation for text {text_id} with {len(characters)} characters")
         narrative_elements = analyze_text_phase2_segmentation(content, characters)
-        
-        api_logger.log_response(
-            status_code=200,
-            body={"segments_count": len(narrative_elements)}
-        )
+        logger.info(f"Created {len(narrative_elements)} narrative segments for text {text_id}")
         
     except Exception as e:
-        api_logger.error(f"Error in text_analysis_phase2_segmentation: {e}", extra={
-            "operation": "text_analysis_phase2_segmentation",
-            "response_data": {"error": str(e)},
-            "status": "error",
-            "text_id": text_id
-        })
+        logger.error(f"Error in text_analysis_phase2_segmentation: {e}", exc_info=True)
         raise ValueError(f"Error in Phase 2 (Segmentation): {e}") from e
         
     return characters, narrative_elements
@@ -406,21 +395,13 @@ def process_text_analysis(db: Session, text_id: int, content: str) -> models.Tex
         print(f"Failed to get analysis results for text {text_id}: {e}") 
         raise
 
-    # Get the Text object
-    db_text = crud.get_text(db, text_id) 
+    # Get the existing text from the database and update it instead of creating a new one
+    db_text = crud.get_text(db, text_id)
     if not db_text:
-        raise ValueError(f"Text with ID {text_id} not found in database.")
+        raise ValueError(f"Text with ID {text_id} not found in database")
     
-    # Clear existing characters and segments (if any)
-    # First delete segments, then characters to avoid foreign key issues
-    crud.delete_segments_by_text(db, text_id)
-    db.query(models.Character).filter(models.Character.text_id == text_id).delete(synchronize_session=False)
-    db.commit()
-
-    # Update text as analyzed and update last_updated
     db_text.analyzed = True
-    db_text.last_updated = datetime.now()  # Explicitly set the timestamp
-    db.add(db_text)
+    db_text.last_updated = datetime.now()
     db.commit()
     db.refresh(db_text)
 
@@ -462,11 +443,12 @@ def process_text_analysis(db: Session, text_id: int, content: str) -> models.Tex
             # Log or handle cases where a role in phase 2 doesn't match a character from phase 1
             warning_message = f"Role '{character_name}' found in segmentation but not in character list for text {text_id}. Skipping segment."
             print(f"Warning: {warning_message}")
-            api_logger.warning(warning_message, extra={"context": {
+            segment_logger = get_logger(__name__, {
                 "operation": "segment_creation_warning",
                 "details": f"Role '{character_name}' not found in character map.",
                 "text_id": str(db_text.id)
-            }})
+            })
+            segment_logger.warning(warning_message)
     
     print(f"Processed text {text_id}: Created {len(db_characters)} characters and {len(db_segments)} segments.")
     

@@ -26,6 +26,7 @@ class Character(Base):
     name = Column(String, nullable=False)
     description = Column(SQLAlchemyText, nullable=True)
     provider_id = Column(String, nullable=True)
+    provider = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # New fields from first Anthropic call

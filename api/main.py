@@ -5,6 +5,15 @@ import os
 from .endpoints import text, character, audio
 from db.database import engine, Base
 from utils.config import settings
+from utils.logging import SessionLogger
+import utils.http_client
+
+# Start API session only if no session exists (preserve test session when under pytest)
+existing_session = SessionLogger.get_current_session()
+if not existing_session:
+    api_session_id = SessionLogger.start_session("api_server")
+else:
+    api_session_id = existing_session
 
 # Create database tables
 Base.metadata.create_all(bind=engine)

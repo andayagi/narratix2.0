@@ -110,14 +110,15 @@ class HumanReadableFormatter(logging.Formatter):
         # Add context data if present (selectively)
         if hasattr(record, 'context') and record.context:
             # Only show important context keys to avoid clutter
-            important_keys = ['session_id', 'user_id', 'operation', 'request_id']
-            context_items = []
-            for key in important_keys:
-                if key in record.context:
-                    context_items.append(f"{key}={record.context[key]}")
+            #important_keys = ['session_id', 'user_id', 'operation', 'request_id']
+            #context_items = []
+            #for key in important_keys:
+            #    if key in record.context:
+            #        context_items.append(f"{key}={record.context[key]}")
             
-            if context_items:
-                formatted += f"\nContext: {', '.join(context_items)}"
+            #if context_items:
+            #    formatted += f"\nContext: {', '.join(context_items)}"
+            pass  # Add a pass statement to properly handle the empty if block
                 
         return formatted
     
@@ -212,23 +213,82 @@ class HumanReadableFormatter(logging.Formatter):
             # Just convert numbers and other primitives to string
             return str(data)
 
-class APILogger(logging.LoggerAdapter):
-    """Logger adapter specifically for API calls with request/response tracking."""
+class SimpleConsoleFormatter(logging.Formatter):
+    """Simplified formatter for console output - doesn't show full request/response bodies."""
+    
+    def __init__(self, fmt=None, datefmt=None, style='%'):
+        super().__init__(fmt, datefmt, style)
+        self.default_fmt = '[%(asctime)s] %(levelname)s - %(name)s: %(message)s'
+    
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a record with simplified output for the console."""
+        # Use a basic format for the main log line
+        self._style._fmt = self.default_fmt
+        formatted = super().format(record)
+        
+        # Add exception info if present
+        if record.exc_info:
+            formatted += f"\nException: {self.formatException(record.exc_info)}"
+        
+        # Skip HTTP request/response details completely for console output
+        # This ensures we have the most minimal console logs
+        
+        return formatted
+
+class ConsoleFilter(logging.Filter):
+    """Filter to exclude detailed HTTP request/response logs from console output."""
+    
+    def filter(self, record):
+        """Return False to block detailed HTTP logs from console."""
+        # Allow non-HTTP logs through
+        if not hasattr(record, 'http_request') and not hasattr(record, 'http_response'):
+            return True
+            
+        # Block logs that have explicit HTTP request/response details
+        if 'HTTP Request:' in record.getMessage() or 'HTTP Response:' in record.getMessage():
+            return False
+            
+        # Allow other logs through
+        return True
+
+class APIFileHandler(logging.FileHandler):
+    """File handler for detailed API logs that filters to only include API-related logs."""
+    
+    def __init__(self, filename, mode='a', encoding=None, delay=False):
+        super().__init__(filename, mode, encoding, delay)
+    
+    def emit(self, record):
+        """Only emit records with HTTP request/response data or API-related information."""
+        # Check for HTTP request/response data
+        if hasattr(record, 'http_request') or hasattr(record, 'http_response'):
+            super().emit(record)
+        # Also include logs from API-related loggers
+        elif record.name.startswith('api.') or 'hume' in record.name.lower() or 'anthropic' in record.name.lower():
+            super().emit(record)
+        # Include logs with API-related messages
+        elif any(term in record.getMessage().lower() for term in ['api', 'http', 'request', 'response']):
+            super().emit(record)
+
+class ContextualLogger(logging.LoggerAdapter):
+    """Base logger adapter that adds context to log records."""
     
     def process(self, msg, kwargs):
         """Process the logging message and keyword arguments."""
-        # Ensure we have an extra dict
-        kwargs.setdefault('extra', {})
+        # Ensure we have an extra dict with a context key
+        kwargs.setdefault('extra', {}).setdefault('context', {})
         
-        # Add API context if present in the adapter's extra
+        # Update the context with our values
         if self.extra:
-            kwargs['extra'].update(self.extra)
+            kwargs['extra']['context'].update(self.extra)
             
         return msg, kwargs
+
+class APILogger(ContextualLogger):
+    """Logger adapter specifically for API calls with request/response tracking."""
     
     def log_request(self, method: str, url: str, headers: Dict = None, body: Any = None):
         """Log an API request."""
-        self.info(f"API Request: {method} {url}", extra={
+        self.info(f"HTTP Request: {method} {url}", extra={
             'http_request': {
                 'method': method,
                 'url': url,
@@ -239,10 +299,10 @@ class APILogger(logging.LoggerAdapter):
     
     def log_response(self, status_code: int, headers: Dict = None, body: Any = None):
         """Log an API response."""
-        self.info(f"API Response: {status_code}", extra={
+        self.info(f"HTTP Response: status_code={status_code}", extra={
             'http_response': {
                 'status_code': status_code,
-                'headers': self._sanitize_headers(headers or {}),
+                'headers': headers or {},
                 'body': body
             }
         })
@@ -256,20 +316,6 @@ class APILogger(logging.LoggerAdapter):
                 sanitized[key] = '[REDACTED]'
         return sanitized
 
-class ContextAdapter(logging.LoggerAdapter):
-    """Logger adapter that adds context to log records."""
-    
-    def process(self, msg, kwargs):
-        """Process the logging message and keyword arguments."""
-        # Ensure we have an extra dict with a context key
-        kwargs.setdefault('extra', {}).setdefault('context', {})
-        
-        # Update the context with our values
-        if self.extra:
-            kwargs['extra']['context'].update(self.extra)
-            
-        return msg, kwargs
-
 class SessionLogger:
     """
     Manages logging for a session or run of the application.
@@ -280,6 +326,7 @@ class SessionLogger:
     
     _current_session: Optional[str] = None
     _session_log_file: Optional[str] = None
+    _session_api_log_file: Optional[str] = None
     _console_handler_configured: bool = False
     
     @classmethod
@@ -356,40 +403,48 @@ class SessionLogger:
         
         # Create the log file name in the format: session_name_[timestamp].log
         log_file_name = f"{session_name}_{timestamp}.log"
+        api_log_file_name = f"{session_name}_{timestamp}_api.log"
         session_id = f"{session_name}_{timestamp}"
         
         # Create date-based log directory with absolute path
         date_dir = LOGS_DIR / date_str
         date_dir.mkdir(parents=True, exist_ok=True)
         
-        # Define log file path within the date directory
+        # Define log file paths within the date directory
         log_file = date_dir / log_file_name
+        api_log_file = date_dir / api_log_file_name
         
-        # Set up log file path for the session
+        # Set up log file paths for the session
         cls._session_log_file = str(log_file)
+        cls._session_api_log_file = str(api_log_file)
         cls._current_session = session_id
         
         # Configure the root logger handlers for this session
-        cls._configure_root_logger(log_file, format_type)
+        cls._configure_root_logger(log_file, api_log_file, format_type)
         
         # Log session start with absolute path for clarity
         logging.info(f"Started logging session: {session_id} -> {log_file}",
+                     extra={"context": {"session_id": session_id}})
+        logging.info(f"API logs will be saved to: {api_log_file}",
                      extra={"context": {"session_id": session_id}})
         
         return session_id
     
     @classmethod
-    def _configure_root_logger(cls, log_file: Path, format_type: str = "json"):
+    def _configure_root_logger(cls, log_file: Path, api_log_file: Path, format_type: str = "json"):
         """Configure the root logger handlers for the current session."""
         root_logger = logging.getLogger()
         # Set level every time in case it was changed elsewhere
         root_logger.setLevel(logging.INFO)
         
-        # Choose the formatter based on format_type
+        # Choose the formatters based on format_type
         if format_type == "human_readable":
-            formatter = HumanReadableFormatter()
+            file_formatter = HumanReadableFormatter()
         else:  # Default to JSON
-            formatter = JsonFormatter()
+            file_formatter = JsonFormatter()
+            
+        # Always use the simplified formatter for console
+        console_formatter = SimpleConsoleFormatter()
         
         # Remove existing file handlers first
         for handler in root_logger.handlers[:]:
@@ -405,16 +460,31 @@ class SessionLogger:
                     root_logger.removeHandler(handler)
             cls._console_handler_configured = False
             
-        # Add console handler
+        # Get console log level from environment variable, default to WARNING
+        console_level_name = os.environ.get('LOG_LEVEL_CONSOLE', 'WARNING').upper()
+        console_level = getattr(logging, console_level_name, logging.WARNING)
+            
+        # Add console handler with simplified formatter and configurable log level
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
+        console_handler.setFormatter(console_formatter)
+        console_handler.setLevel(console_level)  # Use configurable console level
+        # Add filter to block detailed HTTP logs from console
+        console_handler.addFilter(ConsoleFilter())
         root_logger.addHandler(console_handler)
         cls._console_handler_configured = True
 
-        # Add the file handler for the new session
+        # Add the file handler for the new session with full details
+        # Keep INFO level for file logs to capture all relevant information
         file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(file_formatter)
+        file_handler.setLevel(logging.INFO)  # Ensure we capture all INFO logs in files
         root_logger.addHandler(file_handler)
+        
+        # Add the API-specific file handler with full details
+        api_file_handler = APIFileHandler(api_log_file)
+        api_file_handler.setFormatter(file_formatter)  # Use the full formatter for API logs
+        api_file_handler.setLevel(logging.INFO)  # Ensure we capture all INFO logs in API files
+        root_logger.addHandler(api_file_handler)
 
     @classmethod
     def get_logger(cls, name: str, context: Dict[str, Any] = None) -> logging.LoggerAdapter:
@@ -440,12 +510,17 @@ class SessionLogger:
         logger = logging.getLogger(name)
         # Make sure logger propagates to root logger where handlers are set
         logger.propagate = True
-        return ContextAdapter(logger, context_data)
+        return ContextualLogger(logger, context_data)
     
     @classmethod
     def get_session_log_file(cls) -> Optional[str]:
         """Get the path to the current session log file."""
         return cls._session_log_file
+    
+    @classmethod
+    def get_session_api_log_file(cls) -> Optional[str]:
+        """Get the path to the current session API log file."""
+        return cls._session_api_log_file
     
     @classmethod
     def get_current_session(cls) -> Optional[str]:
@@ -470,5 +545,6 @@ def get_logger(name: str, context: Dict[str, Any] = None, is_api: bool = False) 
     """
     base_logger = SessionLogger.get_logger(name, context)
     if is_api:
+        # Create an APILogger with the same context
         return APILogger(base_logger.logger, base_logger.extra)
     return base_logger
