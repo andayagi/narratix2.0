@@ -21,6 +21,7 @@ class TextResponse(BaseModel):
     content: str
     title: Optional[str]
     analyzed: bool
+    created: Optional[bool] = None
 
 @router.post("/", response_model=TextResponse)
 async def create_text(
@@ -41,7 +42,8 @@ async def create_text(
             "id": existing_text.id,
             "content": existing_text.content,
             "title": existing_text.title,
-            "analyzed": existing_text.analyzed
+            "analyzed": existing_text.analyzed,
+            "created": False
         }
     
     # Create new text
@@ -51,7 +53,8 @@ async def create_text(
         "id": db_text.id,
         "content": db_text.content,
         "title": db_text.title,
-        "analyzed": db_text.analyzed
+        "analyzed": db_text.analyzed,
+        "created": True
     }
 
 @router.get("/{text_id}", response_model=TextResponse)

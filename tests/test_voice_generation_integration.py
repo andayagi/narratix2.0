@@ -42,7 +42,7 @@ def test_character(db_session, test_text):
     # No cleanup needed as we keep the data for inspection
 
 @pytest.mark.asyncio
-async def test_generate_character_voice(db_session, test_text, test_character):
+async def test_generate_character_voice(db_session, test_text, test_character, monkeypatch):
     """
     Tests the voice generation pipeline using real Hume AI API calls.
     Requires a valid HUME_API_KEY environment variable.
@@ -52,6 +52,15 @@ async def test_generate_character_voice(db_session, test_text, test_character):
     # Assert initial state
     assert test_character.provider_id is None
     assert test_character.provider is None
+    
+    # Create a segment for the character to ensure voice generation
+    segment = crud.create_text_segment(
+        db_session,
+        text_id=test_text.id,
+        character_id=test_character.id,
+        text="This is a test segment for voice generation.",
+        sequence=1
+    )
     
     # Generate voice using REAL API call - now with await
     voice_id = await generate_character_voice(
@@ -72,4 +81,35 @@ async def test_generate_character_voice(db_session, test_text, test_character):
     assert test_character.provider == "HUME"
     assert test_character.provider_id == voice_id
     
-    print(f"Successfully generated voice with ID: {voice_id}") 
+    print(f"Successfully generated voice with ID: {voice_id}")
+
+@pytest.mark.asyncio
+async def test_generate_character_voice_no_segments(db_session, test_text, test_character):
+    """
+    Tests that voice generation is skipped for characters with no segments.
+    """
+    print(f"Testing voice generation skipped for character without segments")
+    
+    # Assert initial state
+    assert test_character.provider_id is None
+    assert test_character.provider is None
+    
+    # Generate voice for character without segments
+    voice_id = await generate_character_voice(
+        db=db_session,
+        character_id=test_character.id,
+        character_name=test_character.name,
+        character_description=test_character.description,
+        character_intro_text=test_character.intro_text,
+        text_id=test_text.id
+    )
+    
+    # Refresh character from database
+    db_session.refresh(test_character)
+    
+    # Verify no voice was created
+    assert voice_id is None
+    assert test_character.provider_id is None
+    assert test_character.provider is None
+    
+    print("Successfully skipped voice generation for character without segments") 

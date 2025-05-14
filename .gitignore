@@ -40,7 +40,7 @@ audio_files/
 *.db
 *.sqlite
 *.sqlite3
-
+/output
 docs/hume_docs 
 
 # One off tests

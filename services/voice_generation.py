@@ -1,11 +1,11 @@
 import os
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 
 from utils.config import Settings
 from utils.logging import get_logger
-from db import crud
+from db import crud, models
 
 # Import the Hume SDK client
 from hume import AsyncHumeClient
@@ -26,10 +26,17 @@ async def generate_character_voice(
     character_description: str,
     character_intro_text: str,
     text_id: int
-) -> str:
+) -> Optional[str]:
     """
     Generate and save a voice for a character using Hume AI.
+    Only generates voices for characters that have assigned segments.
     """
+    # Check if character has any segments
+    segments = db.query(models.TextSegment).filter(models.TextSegment.character_id == character_id).all()
+    if not segments:
+        logger.info(f"Skipping voice generation for character {character_id} ({character_name}) - no assigned segments")
+        return None
+    
     # Ensure we're using the latest API key from environment
     current_settings = Settings()
     api_key = os.getenv("HUME_API_KEY") or current_settings.HUME_API_KEY

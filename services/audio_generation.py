@@ -1,6 +1,7 @@
 import os
 import json
 import base64  # Add base64 import for decoding
+import subprocess
 from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
 
@@ -19,7 +20,9 @@ logger = get_logger(__name__)
 # Maximum number of retries for API calls
 MAX_RETRIES = 3
 # Delay between retries in seconds
-RETRY_DELAY = 1
+RETRY_DELAY = 5  # Increased from 1 to 5
+# Timeout for HTTP requests in seconds (100 minutes)
+HTTP_TIMEOUT = 6000.0
 
 def generate_text_audio(db: Session, text_id: str) -> str:
     """
@@ -67,7 +70,7 @@ def generate_text_audio(db: Session, text_id: str) -> str:
         # Prepare parameters for utterance
         utterance_params = {
             "text": segment.text,
-            #"description": segment.description,
+            "description": segment.description,
             "voice": PostedUtteranceVoiceWithId(id=voice_id, provider="CUSTOM_VOICE")
         }
         
@@ -93,12 +96,17 @@ def generate_text_audio(db: Session, text_id: str) -> str:
     while retry_count < MAX_RETRIES:
         try:
             # Create a new client instance for each attempt to avoid connection reuse issues
-            hume_client = HumeClient(api_key=settings.HUME_API_KEY)
+            # Use a custom HTTP client with extended timeout
+            import httpx
+            http_client = httpx.Client(timeout=httpx.Timeout(HTTP_TIMEOUT))
+            hume_client = HumeClient(api_key=settings.HUME_API_KEY, httpx_client=http_client)
             
             logger.info(f"Sending request to Hume API with {len(utterances)} utterances (attempt {retry_count + 1})")
+            logger.info(f"Using extended timeout of {HTTP_TIMEOUT} seconds")
             response = hume_client.tts.synthesize_json(
                 utterances=utterances,
-                format=FormatMp3()
+                format=FormatMp3(),
+                strip_headers=True
             )
             
             # Write the audio file
@@ -154,3 +162,53 @@ def get_audio_for_text(db: Session, text_id: str) -> Optional[str]:
             return segment.audio_file
     
     return None
+
+def combine_audio_with_background(narration_audio: str, background_music: str, bg_volume: float = 0.1) -> Optional[str]:
+    """
+    Mix narration audio with background music using ffmpeg.
+    
+    Args:
+        narration_audio: Path to the narration audio file
+        background_music: Path to the background music file
+        bg_volume: Volume level for background music (0.1 = 10%)
+        
+    Returns:
+        Path to the combined audio file, or None if error
+    """
+    try:
+        # Generate output file path
+        output_dir = os.path.dirname(narration_audio)
+        base_filename = os.path.basename(narration_audio)
+        output_filename = f"mixed_{base_filename}"
+        output_path = os.path.join(output_dir, output_filename)
+        
+        # Log the operation
+        logger.info(f"Combining audio {narration_audio} with background music {background_music}")
+        
+        # Use ffmpeg to mix the audio files
+        cmd = [
+            'ffmpeg',
+            '-i', narration_audio,
+            '-stream_loop', '-1',  # Loop background music indefinitely
+            '-i', background_music,
+            '-filter_complex',
+            f'[1:a]volume={bg_volume}[bg];[0:a][bg]amix=inputs=2:duration=first',
+            '-c:a', 'libmp3lame',
+            '-q:a', '2',
+            '-y',  # Overwrite output file if it exists
+            output_path
+        ]
+        
+        # Run the ffmpeg command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"Error combining audio: {result.stderr}")
+            return None
+        
+        logger.info(f"Successfully created mixed audio: {output_path}")
+        return output_path
+    
+    except Exception as e:
+        logger.error(f"Error combining audio with background music: {str(e)}")
+        return None

@@ -35,6 +35,7 @@ class Settings:
         # Read API keys directly from environment to ensure latest values
         self.ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
         self.HUME_API_KEY = os.getenv("HUME_API_KEY", "")
+        self.REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
         self.PROJECT_ROOT = PROJECT_ROOT
         self.OUTPUT_DIR = OUTPUT_DIR
         self.LOGS_DIR = LOGS_DIR
@@ -92,6 +93,10 @@ def validate_config() -> bool:
     
     if not os.getenv("HUME_API_KEY"):
         config_logger.warning("HUME_API_KEY not found in environment variables")
+        return False
+    
+    if not os.getenv("REPLICATE_API_TOKEN"):
+        config_logger.warning("REPLICATE_API_TOKEN not found in environment variables")
         return False
     
     config_logger.info("Configuration validation successful")

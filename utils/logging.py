@@ -326,12 +326,10 @@ class SessionLogger:
     
     _current_session: Optional[str] = None
     _session_log_file: Optional[str] = None
-    _session_api_log_file: Optional[str] = None
     _console_handler_configured: bool = False
     
     @classmethod
-    def start_session(cls, session_name: Optional[str] = None, 
-                       format_type: Literal["json", "human_readable"] = "json") -> str:
+    def start_session(cls, session_name: Optional[str] = None) -> str:
         """
         Start a new logging session. Ensures only one file handler is active.
         Logs are saved in logs/YYYYMMDD/script_name_[timestamp].log
@@ -339,7 +337,6 @@ class SessionLogger:
         Args:
             session_name: Name for the session, typically the script or test name.
                           If not provided, will try to auto-detect the calling script.
-            format_type: The logging format to use - "json" or "human_readable"
                           
         Returns:
             The session ID (which is now the log file name without .log).
@@ -403,45 +400,37 @@ class SessionLogger:
         
         # Create the log file name in the format: session_name_[timestamp].log
         log_file_name = f"{session_name}_{timestamp}.log"
-        api_log_file_name = f"{session_name}_{timestamp}_api.log"
         session_id = f"{session_name}_{timestamp}"
         
         # Create date-based log directory with absolute path
         date_dir = LOGS_DIR / date_str
         date_dir.mkdir(parents=True, exist_ok=True)
         
-        # Define log file paths within the date directory
+        # Define log file path within the date directory
         log_file = date_dir / log_file_name
-        api_log_file = date_dir / api_log_file_name
         
-        # Set up log file paths for the session
+        # Set up log file path for the session
         cls._session_log_file = str(log_file)
-        cls._session_api_log_file = str(api_log_file)
         cls._current_session = session_id
         
         # Configure the root logger handlers for this session
-        cls._configure_root_logger(log_file, api_log_file, format_type)
+        cls._configure_root_logger(log_file)
         
         # Log session start with absolute path for clarity
         logging.info(f"Started logging session: {session_id} -> {log_file}",
-                     extra={"context": {"session_id": session_id}})
-        logging.info(f"API logs will be saved to: {api_log_file}",
                      extra={"context": {"session_id": session_id}})
         
         return session_id
     
     @classmethod
-    def _configure_root_logger(cls, log_file: Path, api_log_file: Path, format_type: str = "json"):
+    def _configure_root_logger(cls, log_file: Path):
         """Configure the root logger handlers for the current session."""
         root_logger = logging.getLogger()
         # Set level every time in case it was changed elsewhere
         root_logger.setLevel(logging.INFO)
         
-        # Choose the formatters based on format_type
-        if format_type == "human_readable":
-            file_formatter = HumanReadableFormatter()
-        else:  # Default to JSON
-            file_formatter = JsonFormatter()
+        # Use JSON formatter for file logs
+        file_formatter = JsonFormatter()
             
         # Always use the simplified formatter for console
         console_formatter = SimpleConsoleFormatter()
@@ -479,13 +468,7 @@ class SessionLogger:
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(logging.INFO)  # Ensure we capture all INFO logs in files
         root_logger.addHandler(file_handler)
-        
-        # Add the API-specific file handler with full details
-        api_file_handler = APIFileHandler(api_log_file)
-        api_file_handler.setFormatter(file_formatter)  # Use the full formatter for API logs
-        api_file_handler.setLevel(logging.INFO)  # Ensure we capture all INFO logs in API files
-        root_logger.addHandler(api_file_handler)
-
+    
     @classmethod
     def get_logger(cls, name: str, context: Dict[str, Any] = None) -> logging.LoggerAdapter:
         """
@@ -518,11 +501,6 @@ class SessionLogger:
         return cls._session_log_file
     
     @classmethod
-    def get_session_api_log_file(cls) -> Optional[str]:
-        """Get the path to the current session API log file."""
-        return cls._session_api_log_file
-    
-    @classmethod
     def get_current_session(cls) -> Optional[str]:
         """Get the current session ID."""
         return cls._current_session
@@ -531,20 +509,17 @@ class SessionLogger:
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Convenience function to get a logger with context
-def get_logger(name: str, context: Dict[str, Any] = None, is_api: bool = False) -> logging.LoggerAdapter:
+def get_logger(name: str, context: Dict[str, Any] = None) -> logging.LoggerAdapter:
     """
     Get a logger with session context.
     
     Args:
         name: Logger name (typically __name__)
         context: Additional context data to include in all log records
-        is_api: If True, returns an APILogger instance for detailed API logging
         
     Returns:
-        A logger adapter with context
+        A logger adapter with context that can handle API requests/responses
     """
     base_logger = SessionLogger.get_logger(name, context)
-    if is_api:
-        # Create an APILogger with the same context
-        return APILogger(base_logger.logger, base_logger.extra)
-    return base_logger
+    # Always return an APILogger to ensure API requests/responses are properly logged
+    return APILogger(base_logger.logger, base_logger.extra)

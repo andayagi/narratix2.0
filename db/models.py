@@ -13,6 +13,7 @@ class Text(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     analyzed = Column(Boolean, default=False, nullable=False)
+    background_music_prompt = Column(SQLAlchemyText, nullable=True)
     
     characters = relationship("Character", back_populates="text", cascade="all, delete-orphan")
     segments = relationship("TextSegment", back_populates="text_obj", cascade="all, delete-orphan")
@@ -28,6 +29,7 @@ class Character(Base):
     provider_id = Column(String, nullable=True)
     provider = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     # New fields from first Anthropic call
     is_narrator = Column(Boolean, nullable=True)
@@ -48,6 +50,7 @@ class TextSegment(Base):
     sequence = Column(Integer, nullable=False)
     audio_file = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     # New fields from second Anthropic call
     description = Column(SQLAlchemyText, nullable=True)

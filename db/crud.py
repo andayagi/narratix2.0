@@ -65,6 +65,18 @@ def get_character(db: Session, character_id: int) -> Optional[models.Character]:
     """Get a character by ID"""
     return db.query(models.Character).filter(models.Character.id == character_id).first()
 
+def delete_characters_by_text(db: Session, text_id: int) -> int:
+    """Delete all characters associated with a text_id
+    
+    Returns:
+        int: Number of deleted characters
+    """
+    result = db.query(models.Character).filter(
+        models.Character.text_id == text_id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return result
+
 # TextSegment CRUD
 def create_text_segment(
     db: Session,

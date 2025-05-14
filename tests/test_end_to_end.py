@@ -3,6 +3,18 @@ import os
 import time
 import sys
 
+"""
+End-to-end test for the text-to-audio processing pipeline.
+
+To run this test:
+    pytest tests/test_end_to_end.py -v
+
+When running the test with pre-existing text:
+    - By default, it will create a new text record
+    - To re-analyze existing text instead, set REANALYZE=1:
+        REANALYZE=1 pytest tests/test_end_to_end.py -v
+"""
+
 # Add the project root to the Python path
 PROJECT_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -59,9 +71,30 @@ def delete_related_resources(text_id, characters):
             except Exception as e:
                 voice_deletion_results.append(f"Failed to delete voice for {character['name']}: {str(e)}")
     
-    # Characters will be deleted automatically due to cascade relationship with text
+    # Delete characters from database
+    deleted_characters = crud.delete_characters_by_text(db, text_id)
+    print(f"Deleted {deleted_characters} characters for text {text_id}")
     
     return voice_deletion_results
+
+def prompt_for_reanalysis():
+    """
+    Determine whether to reanalyze based on environment variable
+    or default to False (create new)
+
+    Set environment variable REANALYZE=1 to re-analyze existing text
+    """
+    import os
+    
+    # Check for environment variable
+    reanalyze = os.getenv("REANALYZE", "0").strip()
+    
+    if reanalyze == "1":
+        print("Choosing option 1: Re-analyze (based on REANALYZE environment variable)")
+        return True
+    else:
+        print("Choosing option 2: Create new records (default or REANALYZE=0)")
+        return False
 
 def test_full_text_to_audio_processing():
     """End-to-end test that processes text from a fixture file to audio output through the API"""
@@ -71,6 +104,7 @@ def test_full_text_to_audio_processing():
     assert text_content, "Fixture text should not be empty"
     
     # Step 2: Check if text already exists in the database
+    print("\n----- Creating or finding text in database -----")
     response = client.post(
         "/api/text/",
         json={
@@ -82,12 +116,24 @@ def test_full_text_to_audio_processing():
     text_data = response.json()
     text_id = text_data["id"]
     
-    # If text already exists and is analyzed, ask user if they want to re-analyze
-    if text_data["analyzed"]:
-        print(f"\nText with ID {text_id} is already analyzed.")
-        user_input = input("Would you like to re-analyze it? (y/n): ").lower().strip()
+    # Explicitly check whether the text was created or found
+    # First check if 'created' property exists in the response (for backward compatibility)
+    pre_existing = False
+    if "created" in text_data:
+        # Use the 'created' flag directly from the API
+        pre_existing = not text_data["created"]
+        if pre_existing:
+            print(f"FOUND: Text with ID {text_id} already exists in the database.")
+        else:
+            print(f"CREATED: New text with ID {text_id} has been created in the database.")
+
+    # If text already exists and is analyzed, prompt user for action
+    if pre_existing:
+        reanalyze = prompt_for_reanalysis()
         
-        if user_input == 'y':
+        if reanalyze:
+            print(f"\n----- Reanalyzing existing text -----")
+            
             # Get all characters for the text
             response = client.get(f"/api/character/text/{text_id}")
             assert response.status_code == 200, "Failed to retrieve characters"
@@ -103,11 +149,31 @@ def test_full_text_to_audio_processing():
             assert response.status_code == 200, f"Failed to re-analyze text: {response.text}"
             print(f"Text {text_id} has been re-analyzed")
         else:
-            print("Continuing with existing text analysis")
+            # Create new text record instead
+            print(f"\n----- Creating new text record -----")
+            response = client.post(
+                "/api/text/",
+                json={
+                    "content": text_content,
+                    "title": "E2E Test Text (New)",
+                    "force_new": True
+                }
+            )
+            assert response.status_code == 200, f"Failed to create new text: {response.text}"
+            text_data = response.json()
+            text_id = text_data["id"]
+            print(f"Created new text with ID {text_id}")
+            
+            # Analyze the new text
+            response = client.put(f"/api/text/{text_id}/analyze")
+            assert response.status_code == 200, f"Failed to analyze text: {response.text}"
+            print(f"Text {text_id} has been analyzed")
     else:
         # Step 3: Analyze the text via API (if not already analyzed)
+        print(f"\n----- Analyzing new text -----")
         response = client.put(f"/api/text/{text_id}/analyze")
         assert response.status_code == 200, f"Failed to analyze text: {response.text}"
+        print(f"Text {text_id} has been analyzed for the first time")
     
     # Step 4: Verify analysis results
     response = client.get(f"/api/text/{text_id}")
@@ -116,6 +182,7 @@ def test_full_text_to_audio_processing():
     assert text_data["analyzed"], "Text should be marked as analyzed"
     
     # Step 4.5: Generate voices for characters
+    print(f"\n----- Generating voices for characters -----")
     # Get all characters for the text
     response = client.get(f"/api/character/text/{text_id}")
     assert response.status_code == 200, "Failed to retrieve characters"
@@ -123,6 +190,7 @@ def test_full_text_to_audio_processing():
     
     # Generate a voice for each character
     for character in characters:
+        print(f"Generating voice for character: {character['name']}")
         response = client.post(
             f"/api/character/{character['id']}/voice",
             json={
@@ -132,6 +200,7 @@ def test_full_text_to_audio_processing():
         assert response.status_code == 200, f"Failed to generate voice for character {character['id']}"
     
     # Step 5: Generate audio for the text via API
+    print(f"\n----- Generating audio for text -----")
     response = client.post(f"/api/audio/text/{text_id}/generate")
     assert response.status_code == 200, f"Failed to generate audio: {response.text}"
     audio_data = response.json()
@@ -153,6 +222,6 @@ def test_full_text_to_audio_processing():
     # Step 9: Verify audio file is valid by checking file size instead of using AudioSegment
     file_size = os.path.getsize(output_path)
     assert file_size > 0, "Audio file should not be empty"
-    print(f"Successfully generated audio file with size: {file_size} bytes")
+    print(f"\nSuccess! Generated audio file with size: {file_size} bytes at {output_path}")
 
 SessionLogger.start_session("test_end_to_end") 

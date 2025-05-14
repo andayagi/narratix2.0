@@ -101,6 +101,10 @@ async def create_character_voice(
             character_intro_text=character.intro_text or "",
             text_id=text_id
         )
+        
+        if voice_id is None:
+            return {"status": "skipped", "message": "Character has no assigned segments"}
+            
         return {"status": "success", "voice_id": voice_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate voice: {str(e)}")

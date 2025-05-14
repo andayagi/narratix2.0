@@ -18,6 +18,12 @@ from db import models, crud
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
+# Register custom markers
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "integration: mark test as an integration test that may interact with external services"
+    )
+
 @pytest.fixture
 def db_session():
     """Provides a SQLAlchemy session for tests"""

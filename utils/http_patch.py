@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional
 from utils.logging import get_logger
 
 # Initialize API logger
-api_logger = get_logger("api.http.client", is_api=True)
+api_logger = get_logger("api.http.client")
 
 # Store original transport classes for reference
 original_http_transport = httpx.HTTPTransport

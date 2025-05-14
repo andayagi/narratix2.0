@@ -50,84 +50,23 @@ def _extract_json_from_response(response_text: str) -> Dict[str, Any]:
 
 def analyze_text_phase1_characters(text_content: str) -> List[CharacterDetail]:
     """Phase 1: Identify characters using Claude Haiku."""
-    prompt = f"""<examples>
-<example>
-<text>
-"Maya soared through the crimson sky on Azura's massive scaled back. 'We need to fly higher to avoid the storm clouds,' she called out, her voice determined yet concerned. 'Always so cautious,' laughed Kell from his perch on the nearby cliff. 'Your dragon can handle a little lightning!' His tone was teasing but affectionate. Maya frowned. 'I'm not risking Azura's wings again,' she replied firmly."
-</text>
-<ideal_output>
-{{
-  "characters": [
-    {{
-      "name": "Narrator",
-      "is_narrator": true,
-      "speaking":false,
-      "persona_description": "Adult male, American accent, has the charismatic voice of a seasoned fantasy audiobook narrator, with a deep, resonant tone and a talent for dramatic pacing that brings every battle scene to life.",
-      "text": "Welcome to this book, it's a fantasy romance taking place in a magical world of dragons and riders"
-    }},
-    {{
-      "name": "Maya",
-      "is_narrator": false,
-      "speaking":true,
-      "persona_description": "Adult female, American accent, has an intense, focused voice, like a weathered astronaut recounting a harrowing mission with controlled emotion and steely determination.",
-      "text": "Hi, I'm Maya and this is my dragon Azura"
-    }},
-    {{
-      "name": "Kell",
-      "is_narrator": false,
-      "speaking":true,
-      "persona_description": "Adult male, American accent, has the charismatic, expressive voice of a mischievous extreme sports guru, who is both playful and warm",
-       "text": "Hi, I'm Kell and I'm an experienced dragon rider"
-    }}
-  ]
-}}
-</ideal_output>
-</example>
-<example>
-<text>
-"I soared through the crimson sky on Azura's massive scaled back. 'We need to fly higher to avoid the storm clouds,' I called out, my voice determined yet concerned. 'Always so cautious,' laughed Kell from his perch on the nearby cliff. 'Your dragon can handle a little lightning!' His tone was teasing but affectionate. I frowned. 'I'm not risking Azura's wings again,' I replied firmly."
-</text>
-<ideal_output>
-{{
-  "characters": [
-    {{
-      "name": "protagonist",
-      "is_narrator": true,
-      "speaking":true,
-      "persona_description": "Adult female, American accent, has an emotive voice, with a medium-high pitch that effortlessly conveys a wide range of feelings, making her an amazing voice for animation and heartfelt stories.",
-       "text": "I'm a dragon rider and this is my dragon Azura"
-    }},
-    {{
-      "name": "Kell",
-      "is_narrator": false,
-      "speaking":true,
-      "persona_description": "Adult male, American accent, charismatic, expressive voice of a mischievous extreme sports guru, who speaks with a playful yet warm American accent, inspiring and thrilling listeners with every word",
-       "text": "I'm Kell and I'm an experienced dragon rider"
-    }}
-  ]
-}}
-</ideal_output>
-</example>
-</examples>
+    prompt = f"""your job is to put together a list of characters for voiceover, so only speaking characters and narrator (if exist).
 
-Analyze text only for characters with dialogue parts and output only json file. 
-
-Output Format:
-Provide your analysis in the following JSON format:
+Output only json:
 {{
   "characters": [
     {{
       "name": "Character name or Narrator",
       "is_narrator": true/false,
       "speaking":true,
-      "persona_description": "Age group, male OR female, short voice\\\\persona\\\\genre description",
+      "persona_description": "Age group, male OR female, short voice\\persona\\genre description",
       "text":"how the character would introduce itself to others in the book, if third person narrator then an introduction to the book"
     }},
     {{
       "name": "Another character",
       "is_narrator": false,
       "speaking":true,
-      "persona_description": "Age group, male OR female, short voice\\\\persona\\\\genre description",
+      "persona_description": "Age group, male OR female, short voice\\persona\\genre description",
       "text":"how the character would introduce itself to others in the book"
     }}
   ]
@@ -135,28 +74,27 @@ Provide your analysis in the following JSON format:
 
 
 Instructions:
-1. Identify all characters in the text
-2. Add a "Narrator" record if there's a third person narrator
-4. For each character add if it speaks in the text speaking=true\\\\false
-5. For each entry describe in one short sentence the voice for voiceover - [AGE GROUP] [MALE or FEMALE], no accent, [CORE VOCAL QUALITY + INTENSITY LEVEL] voice, [SPEAKING PATTERN], like [PRECISE CHARACTER ARCHETYPE] [PERFORMING CHARACTERISTIC ACTION WITH EMOTIONAL SUBTEXT]. words like young and youthful should be used only for children characters. 
-6. For each entry describe how the character would introduce itself to others in the book, if third person narrator then an introduction to the book
+1. Identify ONLY characters that have dialogue parts (they are speaking in the story)
+2. IMPORTANT: For FIRST-person narratives, do not create both a "protagonist" and a separate "Narrator" role - they are the same character. use only protagonist.
+3. IMPORTANT: If none of the characters are the narrators - add "Narrator" entry
+4. For each entry describe in one short sentence the voice for voiceover - [AGE GROUP (young adult\\adult\\elder)] [MALE OR FEMALE], American accent, [CORE VOCAL QUALITY + INTENSITY LEVEL] voice, [SPEAKING PATTERN], like [PRECISE CHARACTER ARCHETYPE] [PERFORMING CHARACTERISTIC ACTION WITH EMOTIONAL SUBTEXT]. words like young and youthful should be used only for children characters. don't use the word neutral.
+5. For each entry describe how the character would introduce itself to others in the book, if third person narrator then an introduction to the book
 
 
 Now analyze this text:
-{text_content}
-"""
+{text_content}"""
 
     # Log full Anthropics API request
     logger.info("Anthropic API Request", extra={"anthropic_request": {
         "model": "claude-3-5-haiku-20241022",
-        "max_tokens": 2000,
-        "temperature": 1,
+        "max_tokens": 8192,
+        "temperature": 0.2,
         "messages": [{"role": "user", "content": prompt}]
     }})
     response = anthropic_client.messages.create(
         model="claude-3-5-haiku-20241022",
-        max_tokens=2000,
-        temperature=1, 
+        max_tokens=8192,
+        temperature=0.2, 
         messages=[
             {
                 "role": "user",
@@ -187,7 +125,7 @@ def analyze_text_phase2_segmentation(text_content: str, characters: List[Charact
     """Phase 2: Segment text and add voice instructions using Claude Sonnet."""
     
     # Prepare roles_names_json input for the second prompt
-    roles_names = {"roles": [{"name": char["name"]} for char in characters]}
+    roles_names = {"roles": [{"name": char["name"], "is_narrator": char["is_narrator"]} for char in characters]}
     roles_names_json = json.dumps(roles_names, indent=2)
     
     prompt = f"""<examples>
@@ -284,8 +222,9 @@ breakdown the following text into segments wherever there's a dialog. for each s
 Your goal is to create a JSON output that breaks down the text into segments, assigns roles to each segment, and provides acting instructions. Follow these steps:
 
 1. Breakdown the text into segments wherever there's a dialog
-2. Assign appropriate roles to each segment based on the provided roles_names_json.
-3. For each segment add:
+2. Assign dialogues (quoted text) to the characters from the roles_names_json
+3. other segments assigned to the character from the roles_names_json where is_narrator: true.
+4. For each segment add:
    - description: Provide concise acting instructions in natural language.
    - speed: Adjust the relative speaking rate on a non-linear scale from 0.25 (much slower) to 3.0 (much faster), where 1.0 represents normal speaking pace.
    - trailing_silence: Specify a duration of trailing silence (in seconds) to add after each utterance.
@@ -328,7 +267,7 @@ here's the roles_names_json and text:
     logger.info("Anthropic API Segmentation Request", extra={"anthropic_request": {
         "model": "claude-3-7-sonnet-20250219",
         "max_tokens": 4096,
-        "temperature": 1,
+        "temperature": 0.1,
         "messages": [{"role": "user", "content": prompt}]
     }})
     response = anthropic_client.messages.create(
@@ -395,13 +334,12 @@ def process_text_analysis(db: Session, text_id: int, content: str) -> models.Tex
         print(f"Failed to get analysis results for text {text_id}: {e}") 
         raise
 
-    # Get the existing text from the database and update it instead of creating a new one
+    # Get the text from database
     db_text = crud.get_text(db, text_id)
     if not db_text:
         raise ValueError(f"Text with ID {text_id} not found in database")
     
     db_text.analyzed = True
-    db_text.last_updated = datetime.now()
     db.commit()
     db.refresh(db_text)
 

@@ -25,15 +25,28 @@ def upgrade() -> None:
     # Create new table with the schema we want
     op.execute('CREATE TABLE texts_new (id INTEGER NOT NULL, content TEXT NOT NULL, title VARCHAR, created_at DATETIME DEFAULT (CURRENT_TIMESTAMP), analyzed BOOLEAN NOT NULL DEFAULT False, last_updated DATETIME DEFAULT (CURRENT_TIMESTAMP), PRIMARY KEY (id))')
     
-    # Copy data from old table to new table
-    op.execute('INSERT INTO texts_new SELECT id, content, title, created_at, analyzed, created_at FROM texts')
+    # Copy data from old table to new table - use current timestamp for last_updated
+    op.execute('INSERT INTO texts_new SELECT id, content, title, created_at, analyzed, CURRENT_TIMESTAMP FROM texts')
     
     # Drop old table and rename new one
     op.execute('DROP TABLE texts')
     op.execute('ALTER TABLE texts_new RENAME TO texts')
+    
+    # Create a trigger to automatically update the last_updated field
+    op.execute('''
+        CREATE TRIGGER update_texts_last_updated
+        AFTER UPDATE ON texts
+        FOR EACH ROW
+        BEGIN
+            UPDATE texts SET last_updated = CURRENT_TIMESTAMP WHERE id = NEW.id;
+        END;
+    ''')
 
 
 def downgrade() -> None:
+    # Drop the trigger first
+    op.execute('DROP TRIGGER IF EXISTS update_texts_last_updated')
+    
     # Similar process but reversing the changes
     op.execute('CREATE TABLE texts_new (id INTEGER NOT NULL, content TEXT NOT NULL, title VARCHAR, created_at DATETIME DEFAULT (CURRENT_TIMESTAMP), analyzed BOOLEAN NOT NULL DEFAULT False, PRIMARY KEY (id))')
     op.execute('INSERT INTO texts_new SELECT id, content, title, created_at, analyzed FROM texts')
