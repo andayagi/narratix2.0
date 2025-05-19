@@ -2,13 +2,14 @@ import pytest
 import os
 import uuid
 from datetime import datetime
+import base64
 
 from utils.logging import SessionLogger
-SessionLogger.start_session(f"test_audio_generation_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+SessionLogger.start_session(f"test_speech_generation_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
 from db import models, crud
 from utils.config import settings
-from services.audio_generation import generate_text_audio
+from services.speech_generation import generate_text_audio
 
 # Skip the test if HUME_API_KEY is not available or invalid
 if not settings.HUME_API_KEY or len(settings.HUME_API_KEY) < 10:
@@ -17,8 +18,8 @@ if not settings.HUME_API_KEY or len(settings.HUME_API_KEY) < 10:
 # db_session fixture is imported from conftest.py
 
 # Voice IDs
-MAN_VOICE_ID = "f0f92a3c-a181-4ee3-abeb-63ed8eacf898"
-WOMAN_VOICE_ID = "f6f2cc66-2e13-46ce-88c8-c049cf6e8c64"  
+MAN_VOICE_ID = "a9f41985-fc78-4081-b1ab-9e20aa360385"
+WOMAN_VOICE_ID = "bd59eb6c-4d73-402c-8537-a69a8e147ab5"  
 
 @pytest.fixture
 def test_text(db_session):
@@ -111,25 +112,36 @@ def test_generate_text_audio(db_session, test_text, test_male_character, test_fe
     
     # Verify initial state
     for segment in segments:
-        assert segment.audio_file is None
+        assert segment.audio_data_b64 is None
     
     # Generate audio using REAL API call
-    audio_file_path = generate_text_audio(db=db_session, text_id=test_text.id)
+    success = generate_text_audio(db=db_session, text_id=test_text.id)
     
-    # Verify audio was generated
-    assert audio_file_path is not None
-    assert os.path.exists(audio_file_path)
+    # Verify audio was generated successfully
+    assert success is True, "Audio generation should return True on success"
     
-    # Refresh segments from database
+    # Force a complete refresh from database with separate queries
+    refreshed_segments = []
     for segment in segments:
-        db_session.refresh(segment)
-        assert segment.audio_file is not None
-        assert segment.audio_file == audio_file_path
+        # Get a fresh instance from the database
+        fresh_segment = db_session.query(models.TextSegment).filter(
+            models.TextSegment.id == segment.id
+        ).first()
+        refreshed_segments.append(fresh_segment)
     
-    print(f"Successfully generated audio file: {audio_file_path}")
+    # Verify each segment has audio data
+    for segment in refreshed_segments:
+        # Check if audio_data_b64 exists and is not None or empty
+        print(f"Segment {segment.id} retrieved audio_data_b64: '{segment.audio_data_b64}'")
+        assert segment.audio_data_b64 is not None, f"Segment {segment.id} has NULL audio_data_b64"
+        assert segment.audio_data_b64 != "", f"Segment {segment.id} has empty audio_data_b64"
+        
+        # Verify audio data is a valid base64 string with reasonable size
+        try:
+            audio_bytes = base64.b64decode(segment.audio_data_b64)
+            assert len(audio_bytes) > 1000, f"Audio data for segment {segment.id} is too small: {len(audio_bytes)} bytes"
+            print(f"Segment {segment.id} audio data size: {len(audio_bytes)} bytes")
+        except Exception as e:
+            assert False, f"Failed to decode base64 for segment {segment.id}: {str(e)}"
     
-    # Verify file size is reasonable (should be at least a few KB for audio)
-    file_size = os.path.getsize(audio_file_path)
-    assert file_size > 1000, f"Audio file size is too small: {file_size} bytes"
-    
-    print(f"Audio file size: {file_size} bytes") 
+    print(f"Successfully generated audio data for {len(segments)} segments") 

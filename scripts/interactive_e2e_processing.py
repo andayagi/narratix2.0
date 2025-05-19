@@ -26,6 +26,10 @@ from api.main import app
 from db.database import get_db, SessionLocal
 from utils.logging import SessionLogger
 import utils.http_client
+from services.background_music import process_background_music_for_text
+from services.combine_export_audio import export_final_audio
+import shutil
+import tempfile
 
 # Set a very long timeout for HTTP requests (6000 seconds = 100 minutes)
 LONG_TIMEOUT = 6000.0
@@ -152,18 +156,24 @@ def prompt_action_for_existing_analyzed_text():
     print("Options:")
     print("1. Re-analyze (deletes existing characters, segments, and voices)")
     print("2. Re-generate audio (uses existing analysis)")
-    print("3. Abort")
+    print("3. Generate bg music (uses existing speech audio segments)")
+    print("4. Combine audio (combine speech segments and bg music)")
+    print("5. Abort")
     
     while True:
-        choice = input("Enter your choice (1, 2, or 3): ").strip()
+        choice = input("Enter your choice (1, 2, 3, 4, or 5): ").strip()
         if choice == "1":
             return "reanalyze"
         elif choice == "2":
             return "regenerate"
         elif choice == "3":
+            return "generate_bg_music"
+        elif choice == "4":
+            return "combine_audio"
+        elif choice == "5":
             return "abort"
         else:
-            print("Invalid choice. Please enter 1, 2, or 3.")
+            print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
 
 def get_audio_output_path(text_id):
     """Generate and create a date-based directory structure for audio output files"""
@@ -186,37 +196,69 @@ def get_audio_output_path(text_id):
 def run_interactive_e2e_flow():
     """End-to-end process for text to audio, with interactive prompts if needed."""
     try:
-        # Step 1: Read the text input file
-        input_file_path = os.path.join(PROJECT_ROOT, 'scripts', 'input_interactive_e2e')
-        text_content = read_file(input_file_path)
-        if not text_content:
-            raise Exception("Input text file is empty")
+        # Ask user if they want to use input file or text_id
+        print("\n----- Text Source Selection -----")
+        print("1. Use input file from scripts/input_interactive_e2e")
+        print("2. Use existing text_id")
         
-        # Step 2: Check if text already exists in the database
-        print("\n----- Creating or finding text in database -----")
-        response = client.post(
-            "/api/text/",
-            json={
-                "content": text_content,
-                "title": "E2E Test Text"
-            }
-        )
-        if response.status_code != 200:
-            raise Exception(f"Failed to create or find text: {response.text}")
-        
-        text_data = response.json()
-        text_id = text_data["id"]
-        
-        # Explicitly check whether the text was created or found
-        # First check if 'created' property exists in the response (for backward compatibility)
-        pre_existing = False
-        if "created" in text_data:
-            # Use the 'created' flag directly from the API
-            pre_existing = not text_data["created"]
-            if pre_existing:
-                print(f"FOUND: Text with ID {text_id} already exists in the database.")
+        while True:
+            choice = input("Enter your choice (1 or 2): ").strip()
+            if choice == "1":
+                use_input_file = True
+                break
+            elif choice == "2":
+                use_input_file = False
+                text_id = input("Enter the text_id to process: ").strip()
+                if not text_id:
+                    print("Text ID cannot be empty. Please try again.")
+                    continue
+                break
             else:
-                print(f"CREATED: New text with ID {text_id} has been created in the database.")
+                print("Invalid choice. Please enter 1 or 2.")
+
+        # Process based on user's choice
+        if use_input_file:
+            # Step 1: Read the text input file
+            input_file_path = os.path.join(PROJECT_ROOT, 'scripts', 'input_interactive_e2e')
+            text_content = read_file(input_file_path)
+            if not text_content:
+                raise Exception("Input text file is empty")
+            
+            # Step 2: Check if text already exists in the database
+            print("\n----- Creating or finding text in database -----")
+            response = client.post(
+                "/api/text/",
+                json={
+                    "content": text_content,
+                    "title": "E2E Test Text"
+                }
+            )
+            if response.status_code != 200:
+                raise Exception(f"Failed to create or find text: {response.text}")
+            
+            text_data = response.json()
+            text_id = text_data["id"]
+            
+            # Explicitly check whether the text was created or found
+            # First check if 'created' property exists in the response (for backward compatibility)
+            pre_existing = False
+            if "created" in text_data:
+                # Use the 'created' flag directly from the API
+                pre_existing = not text_data["created"]
+                if pre_existing:
+                    print(f"FOUND: Text with ID {text_id} already exists in the database.")
+                else:
+                    print(f"CREATED: New text with ID {text_id} has been created in the database.")
+        else:
+            # Get text details by ID
+            print(f"\n----- Retrieving text with ID {text_id} -----")
+            response = client.get(f"/api/text/{text_id}")
+            if response.status_code != 200:
+                raise Exception(f"Failed to get text: {response.text}")
+            
+            text_data = response.json()
+            pre_existing = True
+            print(f"FOUND: Using existing text with ID {text_id} from the database.")
 
         # Check if pre-existing text is already analyzed
         if pre_existing:
@@ -235,6 +277,9 @@ def run_interactive_e2e_flow():
                 
             characters = response.json()
             has_characters = len(characters) > 0
+            
+            # Initialize action to avoid potential NameError
+            action = None
             
             # If text is analyzed and has characters, prompt with three options
             if is_analyzed and has_characters:
@@ -262,6 +307,12 @@ def run_interactive_e2e_flow():
                 elif action == "regenerate":
                     print(f"\n----- Re-generating audio using existing analysis -----")
                     # Skip analysis step, proceed to voice generation
+                elif action == "generate_bg_music":
+                    print(f"\n----- Generating background music using existing speech audio segments -----")
+                    # Skip analysis and voice generation, proceed to bg music generation
+                elif action == "combine_audio":
+                    print(f"\n----- Combining speech segments and background music -----")
+                    # Skip analysis, voice generation, and speech audio generation
                 elif action == "abort":
                     print("\nOperation aborted by user.")
                     return  # Exit the function
@@ -302,60 +353,115 @@ def run_interactive_e2e_flow():
             
         characters = response.json()
         
-        # Generate a voice for each character
-        for character in characters:
-            # If regenerating and character already has provider_id, skip voice generation
-            if pre_existing and is_analyzed and has_characters and action == "regenerate" and character.get('provider_id'):
-                print(f"Using existing voice for character: {character['name']}")
-                continue
+        # Skip voice generation and speech generation for combine_audio option
+        if pre_existing and is_analyzed and has_characters and action == "combine_audio":
+            pass
+        # Skip voice generation for generate_bg_music option
+        elif pre_existing and is_analyzed and has_characters and action == "generate_bg_music":
+            pass
+        else:
+            # Generate a voice for each character
+            for character in characters:
+                # If regenerating and character already has provider_id, skip voice generation
+                if pre_existing and is_analyzed and has_characters and action == "regenerate" and character.get('provider_id'):
+                    print(f"Using existing voice for character: {character['name']}")
+                    continue
+                    
+                print(f"Generating voice for character: {character['name']}")
+                response = client.post(
+                    f"/api/character/{character['id']}/voice",
+                    json={
+                        "text_id": text_id
+                    }
+                )
+                if response.status_code != 200:
+                    raise Exception(f"Failed to generate voice for character {character['id']}: {response.text}")
                 
-            print(f"Generating voice for character: {character['name']}")
-            response = client.post(
-                f"/api/character/{character['id']}/voice",
-                json={
-                    "text_id": text_id
-                }
-            )
+                response_data = response.json()
+                if response_data.get("status") == "skipped":
+                    print(f"Skipped voice generation for character: {character['name']} - {response_data.get('message')}")
+        
+        # Step 5: Generate speech audio for each segment
+        # Skip speech generation for generate_bg_music and combine_audio options
+        if pre_existing and is_analyzed and has_characters and (action == "generate_bg_music" or action == "combine_audio"):
+            print(f"\n----- Using existing speech audio segments -----")
+        else:
+            print(f"\n----- Generating speech audio for segments -----")
+            response = client.post(f"/api/audio/text/{text_id}/generate-segments")
             if response.status_code != 200:
-                raise Exception(f"Failed to generate voice for character {character['id']}: {response.text}")
+                raise Exception(f"Failed to generate segment audio: {response.text}")
+                
+            segment_audio_data = response.json()
             
-            response_data = response.json()
-            if response_data.get("status") == "skipped":
-                print(f"Skipped voice generation for character: {character['name']} - {response_data.get('message')}")
+            # Add a delay to ensure all segment audio files are fully saved
+            print(f"\n----- Waiting for segment audio files to be saved -----")
+            time.sleep(3)  # Wait for 3 seconds to ensure files are saved
+
+        # Step 5.5: Generate Background Music
+        # Skip bg music generation for combine_audio option
+        if pre_existing and is_analyzed and has_characters and action == "combine_audio":
+            print(f"\n----- Using existing background music -----")
+        else:
+            print(f"\n----- Generating background music -----")
+            db_session = None
+            try:
+                db_session = SessionLocal()
+                prompt_success, prompt, music_success = process_background_music_for_text(db_session, text_id)
+                if not music_success:
+                    print(f"Warning: Background music generation failed or was skipped. Prompt success: {prompt_success}, Prompt: {prompt}")
+                else:
+                    print(f"Background music generated successfully. Prompt: {prompt}")
+            except Exception as e:
+                print(f"Error during background music generation: {str(e)}")
+                print("Warning: Proceeding without background music.")
+            finally:
+                if db_session:
+                    db_session.close()
         
-        # Step 5: Generate audio for the text via API
-        print(f"\n----- Generating audio for text -----")
-        response = client.post(f"/api/audio/text/{text_id}/generate")
-        if response.status_code != 200:
-            raise Exception(f"Failed to generate audio: {response.text}")
-            
-        audio_data = response.json()
+        # Step 6: Generate and Export Final Audio (Speech Segments + Background Music)
+        print(f"\n----- Generating and Exporting Final Audio -----")
         
-        # Step 6: Verify audio was generated
-        if "audio_file" not in audio_data or not audio_data["audio_file"]:
-            raise Exception("No audio file was generated")
+        output_path = get_audio_output_path(text_id) # Final desired path
+        target_output_dir = os.path.dirname(output_path) # Directory for export_final_audio
+        # get_audio_output_path ensures target_output_dir exists
+
+        db_session_export = None
+        generated_audio_by_export_func = None
+        try:
+            db_session_export = SessionLocal()
+            # export_final_audio will use its default bg_volume (0.1) and trailing_silence (0.0)
+            generated_audio_by_export_func = export_final_audio(
+                db=db_session_export, 
+                text_id=text_id,
+                output_dir=target_output_dir
+            )
+        except Exception as e:
+            # This captures errors if export_final_audio raises them
+            print(f"Error during final audio export process: {str(e)}")
+            raise Exception(f"Final audio export failed: {str(e)}") from e # Re-raise to be caught by main try-except
+        finally:
+            if db_session_export:
+                db_session_export.close()
+
+        if not generated_audio_by_export_func or not os.path.exists(generated_audio_by_export_func):
+            raise Exception(f"Final audio file was not generated by export_final_audio or path is invalid: {generated_audio_by_export_func}")
         
-        # Step 7: Get generated audio file
-        audio_file_name = os.path.basename(audio_data["audio_file"])
-        response = client.get(f"/api/audio/file/{audio_file_name}")
-        if response.status_code != 200:
-            raise Exception("Failed to retrieve audio file")
-        
-        # Step 8: Save and verify the audio file
-        output_path = get_audio_output_path(text_id)
-        with open(output_path, "wb") as f:
-            f.write(response.content)
-        
-        # Step 9: Verify audio file is valid by checking file size instead of using AudioSegment
+        # Move the generated file to the specific filename format/path expected by this script
+        if generated_audio_by_export_func != output_path:
+            shutil.move(generated_audio_by_export_func, output_path)
+            print(f"Moved final audio from {generated_audio_by_export_func} to {output_path}")
+        else:
+            print(f"Final audio generated directly at {output_path}")
+
+        # Step 7: Verify audio file is valid by checking file size
         file_size = os.path.getsize(output_path)
         if file_size <= 0:
-            raise Exception("Generated audio file is empty")
+            raise Exception("Generated final audio file is empty or invalid")
             
-        print(f"\nSuccess! Generated audio file with size: {file_size} bytes at {output_path}")
+        print(f"\nSuccess! Generated final audio file with size: {file_size} bytes at {output_path}")
         
     except Exception as e:
         print(f"\nERROR: Process failed: {str(e)}")
-        return
 
 # SessionLogger.start_session("test_end_to_end") # Commenting out pytest specific logging for now
 

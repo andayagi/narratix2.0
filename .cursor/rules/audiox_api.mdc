@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 When writing or updating code that interacts with the audiox API, always refer to the documentation in the [audiox-api-doc.md](mdc:docs/audiox-api-doc.md) , no need to search the web
 

@@ -34,7 +34,7 @@ PROJECT_STRUCTURE = {
         "__init__.py": "",
         "text_analysis.py": "",
         "voice_generation.py": "",
-        "audio_generation.py": ""
+        "speech_generation.py": ""
     },
     "utils": {
         "__init__.py": "",

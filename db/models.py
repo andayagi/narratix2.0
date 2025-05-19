@@ -14,6 +14,7 @@ class Text(Base):
     last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     analyzed = Column(Boolean, default=False, nullable=False)
     background_music_prompt = Column(SQLAlchemyText, nullable=True)
+    background_music_audio_b64 = Column(SQLAlchemyText, nullable=True)
     
     characters = relationship("Character", back_populates="text", cascade="all, delete-orphan")
     segments = relationship("TextSegment", back_populates="text_obj", cascade="all, delete-orphan")
@@ -49,6 +50,7 @@ class TextSegment(Base):
     text = Column(SQLAlchemyText, nullable=False)
     sequence = Column(Integer, nullable=False)
     audio_file = Column(String, nullable=True)
+    audio_data_b64 = Column(SQLAlchemyText, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     

@@ -24,6 +24,25 @@ def update_text_analyzed(db: Session, text_id: int, analyzed: bool) -> Optional[
         db.refresh(db_text)
     return db_text
 
+def update_text_background_music_audio(db: Session, text_id: int, audio_data_b64: str) -> Optional[models.Text]:
+    """
+    Update the background_music_audio_b64 field for a text.
+    
+    Args:
+        db: Database session
+        text_id: ID of the text to update
+        audio_data_b64: Base64 encoded audio data
+        
+    Returns:
+        Updated Text object or None if text not found
+    """
+    db_text = get_text(db, text_id)
+    if db_text:
+        db_text.background_music_audio_b64 = audio_data_b64
+        db.commit()
+        db.refresh(db_text)
+    return db_text
+
 # Character CRUD
 def create_character(
     db: Session, 
@@ -128,6 +147,14 @@ def update_segment_audio(db: Session, segment_id: int, audio_file: str) -> Optio
     db_segment = db.query(models.TextSegment).filter(models.TextSegment.id == segment_id).first()
     if db_segment:
         db_segment.audio_file = audio_file
+        db.commit()
+        db.refresh(db_segment)
+    return db_segment
+
+def update_segment_audio_data(db: Session, segment_id: int, audio_data_b64: str) -> Optional[models.TextSegment]:
+    db_segment = db.query(models.TextSegment).filter(models.TextSegment.id == segment_id).first()
+    if db_segment:
+        db_segment.audio_data_b64 = audio_data_b64
         db.commit()
         db.refresh(db_segment)
     return db_segment

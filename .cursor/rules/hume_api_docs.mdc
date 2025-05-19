@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 When writing or updating code that interacts with the Hume AI API, always refer to the documentation in the `docs/hume_docs` directory, no need to search the web
 

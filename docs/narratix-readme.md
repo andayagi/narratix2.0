@@ -62,7 +62,7 @@ ProcessLog
 #### 2. `services/`
 - `text_analysis.py` - Anthropic Claude integration for text analysis
 - `voice_generation.py` - Hume AI integration for voice creation
-- `audio_generation.py` - Hume AI integration for TTS and audio processing
+- `speech_generation.py` - Hume AI integration for TTS and audio processing
 
 #### 3. `api/`
 - `main.py` - FastAPI application entry point

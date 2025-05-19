@@ -154,7 +154,7 @@ Add context to help filter and correlate logs:
 
 ```python
 logger = get_logger(__name__, context={
-    "operation": "audio_generation",
+    "operation": "speech_generation",
     "text_id": text_id,
     "user_id": user_id
 })

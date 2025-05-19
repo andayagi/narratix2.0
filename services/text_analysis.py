@@ -227,13 +227,13 @@ Your goal is to create a JSON output that breaks down the text into segments, as
 4. For each segment add:
    - description: Provide concise acting instructions in natural language.
    - speed: Adjust the relative speaking rate on a non-linear scale from 0.25 (much slower) to 3.0 (much faster), where 1.0 represents normal speaking pace.
-   - trailing_silence: Specify a duration of trailing silence (in seconds) to add after each utterance.
+   - trailing_silence: Specify a duration of trailing silence (in seconds) to add after each utterance, typical range 0.5 to 2 seconds.
 
-Best practices for providing acting instructions:
+Providing acting instructions:
 - Use precise emotions instead of broad terms (e.g., "melancholy" instead of "sad").
 - Combine emotions with delivery styles (e.g., "excited but whispering").
 - Indicate pacing using terms like "rushed", "measured", or "deliberate pause".
-- Specify the audience when relevant (e.g., "speaking to a child").
+- Performance context: narration, speaking to a crowd, intimate conversation, etc.
 - Keep instructions concise (e.g., "sarcastic", "angry", "whispering").
 - Use the speed parameter to adjust speech rate rather than describing it in the description field.
 
@@ -246,7 +246,7 @@ Your final output should be in the following JSON format:
       "text": "Text for voiceover",
       "description": "Acting instructions",
       "speed": 1.0,
-      "trailing_silence": 0.5
+      "trailing_silence": 1.0
     }},
     ...
   ]
