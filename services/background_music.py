@@ -170,15 +170,15 @@ def generate_background_music(db: Session, text_id: int) -> bool:
             logger.error(f"No segments found for text with ID {text_id}")
             return False
         
-        audio_file_for_duration_calc = None
-        temp_audio_file = None
-        
         # Check for segments with audio_data_b64
         import tempfile
         
+        # First, calculate total speech duration from all segments
+        total_speech_duration = 0
+        temp_files = []
+        
         for segment in segments:
             if segment.audio_data_b64:
-                # Found a segment with base64 audio data, create a temporary file
                 try:
                     audio_bytes = base64.b64decode(segment.audio_data_b64)
                     fd, temp_path = tempfile.mkstemp(suffix='.mp3')
@@ -187,31 +187,36 @@ def generate_background_music(db: Session, text_id: int) -> bool:
                     with open(temp_path, 'wb') as f:
                         f.write(audio_bytes)
                     
-                    temp_audio_file = temp_path
-                    audio_file_for_duration_calc = temp_path
-                    logger.info(f"Created temporary audio file from segment {segment.id} audio_data_b64")
-                    break
+                    temp_files.append(temp_path)
+                    segment_duration = get_audio_duration(temp_path)
+                    if segment_duration > 0:
+                        total_speech_duration += segment_duration
+                        logger.info(f"Segment {segment.id} duration: {segment_duration} seconds")
+                    else:
+                        logger.warning(f"Could not determine duration for segment {segment.id}")
                 except Exception as temp_file_error:
                     logger.error(f"Error creating temporary file from audio_data_b64: {str(temp_file_error)}")
-                    # Continue to next segment if this one fails
                     continue
         
-        if not audio_file_for_duration_calc:
-            logger.error(f"No audio_data_b64 found for any segments of text with ID {text_id} to calculate duration.")
+        if total_speech_duration <= 0:
+            logger.error(f"Could not determine speech duration for any segments of text with ID {text_id}")
             return False
             
         try:
-            audio_duration = get_audio_duration(audio_file_for_duration_calc)
-            if audio_duration <= 0:
-                logger.error(f"Could not determine audio duration for file {audio_file_for_duration_calc}")
-                return False
-            
             # Calculate sum of trailing_silence from all segments
             total_trailing_silence = sum(segment.trailing_silence for segment in segments if segment.trailing_silence)
             
-            music_duration = int(audio_duration) + total_trailing_silence + 6
+            # Music should be at least as long as total speech + trailing silence + 6 seconds
+            total_duration = total_speech_duration + total_trailing_silence + 6
+            # Round to the nearest integer - Replicate API doesn't accept fractional durations
+            music_duration = int(round(total_duration))
             
-            logger.info(f"Generating background music with prompt: {music_prompt}", extra={"music_prompt": music_prompt, "duration": music_duration})
+            logger.info(f"Generating background music with prompt: {music_prompt}", 
+                       extra={"music_prompt": music_prompt, 
+                              "total_speech_duration": total_speech_duration,
+                              "total_trailing_silence": total_trailing_silence,
+                              "calculated_duration": total_duration,
+                              "final_music_duration": music_duration})
             
             output_url = replicate.run(
                 "ardianfe/music-gen-fn-200e:96af46316252ddea4c6614e31861876183b59dce84bad765f38424e87919dd85",
@@ -264,13 +269,14 @@ def generate_background_music(db: Session, text_id: int) -> bool:
                 )
                 return False
         finally:
-            # Clean up temporary file if created
-            if temp_audio_file and os.path.exists(temp_audio_file):
-                try:
-                    os.remove(temp_audio_file)
-                    logger.info(f"Removed temporary audio file: {temp_audio_file}")
-                except Exception as cleanup_error:
-                    logger.error(f"Error removing temporary file: {str(cleanup_error)}")
+            # Clean up temporary files
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                        logger.info(f"Removed temporary audio file: {temp_file}")
+                    except Exception as cleanup_error:
+                        logger.error(f"Error removing temporary file: {str(cleanup_error)}")
 
     except requests.exceptions.RequestException as req_e:
         logger.error(f"Error downloading background music from Replicate: {str(req_e)}")
@@ -300,6 +306,19 @@ def process_background_music_for_text(db: Session, text_id: int) -> Tuple[bool, 
     Returns:
         Tuple of (prompt_success, music_prompt_or_none, music_generation_success)
     """
+    # First check if the text exists
+    db_text = crud.get_text(db, text_id)
+    if not db_text:
+        logger.error(f"Text with ID {text_id} not found")
+        return False, None, False
+    
+    # Check if music already exists and log it
+    has_existing_prompt = bool(db_text.background_music_prompt)
+    has_existing_audio = bool(db_text.background_music_audio_b64)
+    
+    if has_existing_prompt or has_existing_audio:
+        logger.info(f"Text ID {text_id} already has background music prompt: {has_existing_prompt}, audio: {has_existing_audio}. Will overwrite.")
+    
     # Phase 1: Generate prompt
     music_prompt = generate_background_music_prompt(db, text_id)
     if not music_prompt:
@@ -308,6 +327,12 @@ def process_background_music_for_text(db: Session, text_id: int) -> Tuple[bool, 
     # Phase 2: Generate music and store in DB
     music_generated_and_stored = generate_background_music(db, text_id)
     if not music_generated_and_stored:
+        return True, music_prompt, False
+    
+    # Verify that the music was actually stored
+    db.refresh(db_text)
+    if not db_text.background_music_audio_b64:
+        logger.error(f"Background music generation reported success but audio is not in database for text ID {text_id}")
         return True, music_prompt, False
     
     return True, music_prompt, True 

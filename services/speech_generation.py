@@ -75,8 +75,8 @@ def generate_text_audio(db: Session, text_id: int) -> bool:
         }
         
         # Add optional parameters from segment if they exist
-        if hasattr(segment, 'speed') and segment.speed is not None:
-            utterance_params["speed"] = segment.speed
+        #if hasattr(segment, 'speed') and segment.speed is not None:
+        #    utterance_params["speed"] = segment.speed
         if hasattr(segment, 'trailing_silence') and segment.trailing_silence is not None:
             utterance_params["trailing_silence"] = segment.trailing_silence
             

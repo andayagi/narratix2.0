@@ -2,6 +2,7 @@ import pytest
 import os
 import time
 import sys
+import requests
 import datetime
 import httpx
 

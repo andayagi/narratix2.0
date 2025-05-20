@@ -167,18 +167,22 @@ def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, t
         logger.error(f"Error combining speech segments: {str(e)}")
         return None
 
-def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_volume: float = 1.0, trailing_silence: float = 0.0) -> Optional[str]:
+def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_volume: float = 0.15, trailing_silence: float = 0.0, target_lufs: float = -18.0) -> Optional[str]:
     """
     Create a final audio export by:
     1. Combining all speech segments into one audio file
-    2. Adding background music with speech starting 3 seconds after the music
+    2. Normalizing speech to target LUFS
+    3. Normalizing background music to target LUFS
+    4. Mixing normalized audio with speech starting 3 seconds after the music
+    5. Continue background music for 3 seconds after speech ends with fade out
     
     Args:
         db: Database session
         text_id: ID of the text to process
         output_dir: Directory to save output files (defaults to 'output' in current directory)
-        bg_volume: Background music volume (0.1 = 10%)
+        bg_volume: Background music volume (0.15 = 15%, optimal for graphic audio)
         trailing_silence: Amount of silence (in seconds) to add after each segment
+        target_lufs: Target loudness in LUFS (-18.0 is standard for audiobooks)
         
     Returns:
         Path to the final audio file, or None if error
@@ -199,61 +203,139 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
         # Generate output file name with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         final_audio_path = os.path.join(output_dir, f"final_audio_{text_id}_{timestamp}.mp3")
-            
-        # Step 2: Add background music with speech starting 3 seconds after music
-        logger.info(f"Adding background music for text ID {text_id}")
-        
-        # Use ffmpeg to mix the audio files with offset
-        cmd = [
-            'ffmpeg',
-            '-i', combined_speech_path,  # Speech audio
-            '-stream_loop', '-1',  # Loop background music indefinitely
-            '-i', 'this_will_be_replaced_with_bg_music',  # Placeholder, will be replaced
-            '-filter_complex',
-            f'[0:a]adelay=3000|3000[delayed];[1:a]volume={bg_volume}[bg];[delayed][bg]amix=inputs=2:duration=first',
-            '-c:a', 'libmp3lame',
-            '-q:a', '2',
-            '-y',
-            final_audio_path
-        ]
         
         # Get background music from database
         db_text = crud.get_text(db, text_id)
         if not db_text or not db_text.background_music_audio_b64:
-            logger.warning(f"No background music found in database for text {text_id}. Using speech audio without background.")
-            # Just copy the combined speech to final output
-            import shutil
-            shutil.copy(combined_speech_path, final_audio_path)
-            return final_audio_path
+            logger.warning(f"No background music found in database for text {text_id}. Using normalized speech audio without background.")
+            # Apply normalization to speech only and return
+            normalized_speech_path = os.path.join(output_dir, f"normalized_speech_{text_id}_{timestamp}.mp3")
+            normalize_cmd = [
+                'ffmpeg',
+                '-i', combined_speech_path,
+                '-af', f'loudnorm=I={target_lufs}:TP=-1:LRA=5',
+                '-c:a', 'libmp3lame',
+                '-q:a', '2',
+                '-y',
+                normalized_speech_path
+            ]
+            result = subprocess.run(normalize_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"Error normalizing speech audio: {result.stderr}")
+                return combined_speech_path  # Return unnormalized audio as fallback
+            return normalized_speech_path
             
-        # Create a temporary file for the background music
+        # Create temporary files for processing
+        temp_files = []
+        
+        # Step 2: Create temporary file for background music
         temp_bg_fd, temp_bg_file = tempfile.mkstemp(suffix='.mp3')
         os.close(temp_bg_fd)
+        temp_files.append(temp_bg_file)
         
+        # Step 3: Save background music to temp file
         try:
-            # Decode base64 to binary
             audio_bytes = base64.b64decode(db_text.background_music_audio_b64)
             with open(temp_bg_file, 'wb') as f:
                 f.write(audio_bytes)
-                
-            # Update the command with the actual background music file
-            cmd[6] = temp_bg_file
             
-            # Run the ffmpeg command
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Step 4: Normalize speech to target LUFS
+            temp_norm_speech_fd, temp_norm_speech = tempfile.mkstemp(suffix='.mp3')
+            os.close(temp_norm_speech_fd)
+            temp_files.append(temp_norm_speech)
             
-            # Check result
+            norm_speech_cmd = [
+                'ffmpeg',
+                '-i', combined_speech_path,
+                '-af', f'loudnorm=I={target_lufs}:TP=-1:LRA=5',
+                '-c:a', 'libmp3lame',
+                '-q:a', '2',
+                '-y',
+                temp_norm_speech
+            ]
+            result = subprocess.run(norm_speech_cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                logger.error(f"Error creating final audio: {result.stderr}")
-                return None
+                logger.error(f"Error normalizing speech: {result.stderr}")
+                # Fall back to unnormalized speech
+                temp_norm_speech = combined_speech_path
+            
+            # Step 5: Normalize background music to same target LUFS
+            temp_norm_bg_fd, temp_norm_bg = tempfile.mkstemp(suffix='.mp3')
+            os.close(temp_norm_bg_fd)
+            temp_files.append(temp_norm_bg)
+            
+            norm_bg_cmd = [
+                'ffmpeg',
+                '-i', temp_bg_file,
+                '-af', f'loudnorm=I={target_lufs}:TP=-1:LRA=5',
+                '-c:a', 'libmp3lame',
+                '-q:a', '2',
+                '-y',
+                temp_norm_bg
+            ]
+            result = subprocess.run(norm_bg_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"Error normalizing background music: {result.stderr}")
+                # Fall back to unnormalized bg music
+                temp_norm_bg = temp_bg_file
+            
+            # Step 6: Get duration of speech audio
+            duration_cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                temp_norm_speech
+            ]
+            result = subprocess.run(duration_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"Error getting speech duration: {result.stderr}")
+                speech_duration = 0
+            else:
+                try:
+                    speech_duration = float(result.stdout.strip())
+                except (ValueError, TypeError):
+                    logger.error("Could not parse speech duration")
+                    speech_duration = 0
+            
+            # Step 7: Mix normalized files with proper volume adjustment and fade out
+            mix_cmd = [
+                'ffmpeg',
+                '-i', temp_norm_speech,  # Normalized speech
+                '-stream_loop', '-1',    # Loop background music
+                '-i', temp_norm_bg,      # Normalized background music
+                '-filter_complex',
+                f'[0:a]adelay=3000|3000[delayed];'
+                f'[1:a]volume={bg_volume},afade=t=out:st={speech_duration}:d=3[bg];'
+                f'[delayed]apad=pad_dur=3[padded];'
+                f'[padded][bg]amix=inputs=2:duration=first',
+                '-c:a', 'libmp3lame',
+                '-q:a', '2',
+                '-y',
+                final_audio_path
+            ]
+            
+            result = subprocess.run(mix_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"Error creating final mixed audio: {result.stderr}")
+                # Return normalized speech as fallback
+                return temp_norm_speech
                 
-            logger.info(f"Successfully created final audio: {final_audio_path}")
+            logger.info(f"Successfully created final audio: {final_audio_path} at target {target_lufs} LUFS with {bg_volume*100}% background music and 3-second fade out")
             return final_audio_path
+            
+        except Exception as e:
+            logger.error(f"Error processing audio: {str(e)}")
+            return combined_speech_path  # Return original combined speech as fallback
             
         finally:
             # Clean up temporary files
-            if os.path.exists(temp_bg_file):
-                os.remove(temp_bg_file)
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove temp file {temp_file}: {str(e)}")
                 
     except Exception as e:
         logger.error(f"Error exporting final audio: {str(e)}")
