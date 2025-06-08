@@ -43,10 +43,25 @@ def _extract_json_from_response(response_text: str) -> Dict[str, Any]:
     json_end = response_text.rfind('}') + 1
     
     if json_start == -1 or json_end == 0:
+        logger.error(f"No JSON object found in response. Response: {response_text[:500]}...")
         raise ValueError("Could not find JSON object in response")
         
     json_str = response_text[json_start:json_end]
-    return json.loads(json_str)
+    
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        # Log the problematic JSON for debugging
+        logger.error(f"JSON parsing failed: {e}")
+        logger.error(f"JSON parse error at position {e.pos} (line {e.lineno}, column {e.colno})")
+        logger.error(f"Problematic JSON (first 1000 chars): {json_str[:1000]}")
+        logger.error(f"Response length: {len(response_text)} chars, JSON length: {len(json_str)} chars")
+        
+        # Check if this looks like a truncated response
+        if "Expecting ',' delimiter" in str(e) or not json_str.rstrip().endswith('}'):
+            raise ValueError(f"API response appears to be truncated. JSON parsing failed at position {e.pos}: {e}. Response length: {len(response_text)} chars")
+        else:
+            raise ValueError(f"Invalid JSON response: {e}")
 
 def analyze_text_phase1_characters(text_content: str) -> List[CharacterDetail]:
     """Phase 1: Identify characters using Claude Haiku."""
@@ -266,13 +281,13 @@ here's the roles_names_json and text:
     # Log full Anthropics API segmentation request
     logger.info("Anthropic API Segmentation Request", extra={"anthropic_request": {
         "model": "claude-3-7-sonnet-20250219",
-        "max_tokens": 4096,
+        "max_tokens": 16384,
         "temperature": 0.1,
         "messages": [{"role": "user", "content": prompt}]
     }})
     response = anthropic_client.messages.create(
         model="claude-3-7-sonnet-20250219", 
-        max_tokens=4096,
+        max_tokens=16384,
         temperature=1, 
         messages=[
             {

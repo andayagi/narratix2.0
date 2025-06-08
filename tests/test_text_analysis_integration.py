@@ -173,7 +173,23 @@ def test_full_text_analysis_pipeline():
         
         # 2. Execute: Run the processing function
         # This will call the real Anthropic API
-        updated_db_text = process_text_analysis(db=db, text_id=text_id, content=BASE_TEST_TEXT_CONTENT)
+        try:
+            updated_db_text = process_text_analysis(db=db, text_id=text_id, content=BASE_TEST_TEXT_CONTENT)
+        except ValueError as e:
+            # Check if this is a truncation error
+            if "truncated" in str(e).lower() or "expecting ',' delimiter" in str(e).lower():
+                print(f"\n=== API RESPONSE TRUNCATION ERROR ===")
+                print(f"Text ID: {text_id}")
+                print(f"Content length: {len(BASE_TEST_TEXT_CONTENT)} characters")
+                print(f"Error: {e}")
+                print("The Anthropic API response was cut off/truncated, likely due to response size limits.")
+                print("Consider breaking the text into smaller chunks or increasing max_tokens.")
+                print("=====================================\n")
+                # Re-raise the error to fail the test
+                raise e
+            else:
+                # Re-raise other errors
+                raise e
 
         # 3. Verify: Check results in the database
         db.refresh(updated_db_text)
