@@ -34,6 +34,10 @@ fixture_file = '/Users/anatburg/Narratix2.0/tests/fixtures/text_analysis_example
 with open(fixture_file, 'r', encoding='utf-8') as f:
     BASE_TEST_TEXT_CONTENT = f.read()
 
+def count_words(text):
+    """Count words in a text string"""
+    return len(text.split())
+
 def delete_related_resources(text_id, db):
     """Delete resources related to text: characters, segments, and Hume voices"""
     # Get characters for voice deletion
@@ -216,6 +220,32 @@ def test_full_text_analysis_pipeline():
         segments = db.query(models.TextSegment).filter(models.TextSegment.text_id == text_id).order_by(models.TextSegment.sequence).all()
         assert len(segments) > 0 # Basic check, refine later
         print(f"Found {len(segments)} segments.")
+
+        # Count and compare words
+        input_word_count = count_words(BASE_TEST_TEXT_CONTENT)
+        
+        # Combine all segment content and count words
+        all_segments_content = " ".join([segment.text for segment in segments if segment.text])
+        segments_word_count = count_words(all_segments_content)
+        
+        # Force output to always show
+        word_comparison_output = f"""
+=== WORD COUNT COMPARISON ===
+Input text words: {input_word_count}
+Segments words: {segments_word_count}
+Difference: {segments_word_count - input_word_count}
+Coverage: {(segments_word_count / input_word_count * 100):.1f}%
+=============================
+"""
+        
+        # Force output to terminal using multiple approaches
+        sys.stdout.write(word_comparison_output + "\n")
+        sys.stdout.flush()
+        print(word_comparison_output, flush=True)
+        
+        # Also log to pytest's output - always show as warning, don't fail test
+        import warnings
+        warnings.warn(f"Word count analysis:{word_comparison_output}")
 
         # Explicitly commit any remaining changes to keep data in database
         db.commit()

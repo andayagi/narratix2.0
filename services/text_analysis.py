@@ -1,5 +1,6 @@
 from anthropic import Anthropic
 import json
+import re
 from typing import Dict, List, Tuple, Any, TypedDict
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -13,6 +14,51 @@ anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 # Initialize regular logger
 logger = get_logger(__name__)
+
+def _analyze_text_structure(text):
+    """
+    Analyzes a text and splits it into narrative and dialogue elements.
+    Incorporated from process_text.py for better encapsulation.
+    """
+    # Split the text by dialogue markers (" or " or ").
+    # The regex includes the markers in the split result.
+    parts = re.split(r'(["""])', text)
+
+    elements = []
+    in_dialogue = False
+    buffer = ""
+
+    for part in parts:
+        if part in ['"', '"', '"']:
+            if in_dialogue:
+                # End of dialogue
+                if buffer.strip():
+                    elements.append({"type": "dialogue", "content": buffer.strip().replace('\n', '  ')})
+                buffer = ""
+            else:
+                # Start of dialogue
+                if buffer.strip():
+                    elements.append({"type": "narrative", "content": buffer.strip().replace('\n', '  ')})
+                buffer = ""
+            in_dialogue = not in_dialogue
+        else:
+            buffer += part
+
+    if buffer.strip():
+        # Add any remaining text as narrative
+        elements.append({"type": "narrative", "content": buffer.strip().replace('\n', '  ')})
+        
+    # A simple approach to merge consecutive narrative parts
+    merged_elements = []
+    if elements:
+        merged_elements.append(elements[0])
+        for i in range(1, len(elements)):
+            if elements[i]['type'] == 'narrative' and merged_elements[-1]['type'] == 'narrative':
+                merged_elements[-1]['content'] += ' ' + elements[i]['content']
+            else:
+                merged_elements.append(elements[i])
+
+    return {"elements": merged_elements}
 
 # Define expected structures for clarity
 class CharacterDetail(TypedDict):
@@ -99,24 +145,18 @@ Instructions:
 Now analyze this text:
 {text_content}"""
 
-    # Log full Anthropics API request
-    logger.info("Anthropic API Request", extra={"anthropic_request": {
+    # Define API parameters once to avoid duplication
+    api_params = {
         "model": "claude-3-5-haiku-20241022",
         "max_tokens": 8192,
         "temperature": 0.2,
         "messages": [{"role": "user", "content": prompt}]
-    }})
-    response = anthropic_client.messages.create(
-        model="claude-3-5-haiku-20241022",
-        max_tokens=8192,
-        temperature=0.2, 
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
+    }
+    
+    # Log full Anthropics API request
+    logger.info("Anthropic API Request", extra={"anthropic_request": api_params})
+    
+    response = anthropic_client.messages.create(**api_params)
     
     response_content = response.content[0].text
     # Log full Anthropics API response
@@ -137,108 +177,23 @@ Now analyze this text:
     return characters_data
 
 def analyze_text_phase2_segmentation(text_content: str, characters: List[CharacterDetail]) -> List[NarrativeElement]:
-    """Phase 2: Segment text and add voice instructions using Claude Sonnet."""
+    """Phase 2: Segment text and add voice instructions using improved approach with internal text structure analysis."""
+    
+    # Step 1: Use internal text structure analysis to get structured elements
+    structured_analysis = _analyze_text_structure(text_content)
+    elements = structured_analysis.get("elements", [])
     
     # Prepare roles_names_json input for the second prompt
     roles_names = {"roles": [{"name": char["name"], "is_narrator": char["is_narrator"]} for char in characters]}
     roles_names_json = json.dumps(roles_names, indent=2)
     
-    prompt = f"""<examples>
-<example>
-<text>
-I soared through the crimson sky on Azura's massive scaled back. "We need to fly higher to avoid the storm clouds," I called out, my voice determined yet concerned. "Always so cautious," laughed Kell from his perch on the nearby cliff. "Your dragon can handle a little lightning!" His tone was teasing but affectionate. I frowned. "I'm not risking Azura's wings again," I replied firmly.
-</text>
-<roles_names_json>
-{{
-  "roles": [
-    {{
-      "name": "Protagonist"
-    }},
-    {{
-      "name": "Kell"
-    }}
-  ]
-}}
-</roles_names_json>
-<ideal_output>
-{{
-  "narrative_elements": [
-    {{
-      "role": "Protagonist",
-      "text": "I soared through the crimson sky on Azura's massive scaled back.",
-      "description": "Awe-struck, slightly breathless",
-      "speed": 1.1,
-      "trailing_silence": 0.3
-    }},
-    {{
-      "role": "Protagonist",
-      "text": "\\\"We need to fly higher to avoid the storm clouds,\\\"",
-      "description": "Determined yet concerned, slightly raised voice",
-      "speed": 1.2,
-      "trailing_silence": 0.1
-    }},
-    {{
-      "role": "Protagonist",
-      "text": "I called out, my voice determined yet concerned.",
-      "description": "Neutral, informative tone",
-      "speed": 1.0,
-      "trailing_silence": 0.2
-    }},
-    {{
-      "role": "Kell",
-      "text": "\\\"Always so cautious,\\\"",
-      "description": "Teasing, affectionate laughter",
-      "speed": 0.9,
-      "trailing_silence": 0.1
-    }},
-    {{
-      "role": "Protagonist",
-      "text": "laughed Kell from his perch on the nearby cliff.",
-      "description": "Neutral, informative tone",
-      "speed": 1.0,
-      "trailing_silence": 0.1
-    }},
-    {{
-      "role": "Kell",
-      "text": "\\\"Your dragon can handle a little lightning!\\\"",
-      "description": "Confident, playful tone",
-      "speed": 1.1,
-      "trailing_silence": 0.2
-    }},
-    {{
-      "role": "Protagonist",
-      "text": "His tone was teasing but affectionate. I frowned.",
-      "description": "Thoughtful, slightly conflicted",
-      "speed": 0.9,
-      "trailing_silence": 0.3
-    }},
-    {{
-      "role": "Protagonist",
-      "text": "\\\"I'm not risking Azura's wings again,\\\"",
-      "description": "Firm, resolute tone",
-      "speed": 1.0,
-      "trailing_silence": 0.1
-    }},
-    {{
-      "role": "Protagonist",
-      "text": "I replied firmly.",
-      "description": "Neutral, informative tone",
-      "speed": 1.0,
-      "trailing_silence": 0.5
-    }}
-  ]
-}}
-</ideal_output>
-</example>
-</examples>
+    # Convert structured elements to JSON
+    structured_elements_json = json.dumps(elements, indent=2)
+    
+    prompt = f"""enrich the following json elements.
 
-breakdown the following text into segments wherever there's a dialog. for each segment, choose a name from the roles_names_json which character will voiceover it and provide additional voiceover instructions. 
-
-Your goal is to create a JSON output that breaks down the text into segments, assigns roles to each segment, and provides acting instructions. Follow these steps:
-
-1. Breakdown the text into segments wherever there's a dialog
-2. Assign dialogues (quoted text) to the characters from the roles_names_json
-3. other segments assigned to the character from the roles_names_json where is_narrator: true.
+1. Assign dialogues (quoted text) to the characters from the roles_names_json
+2. other segments assigned to the character from the roles_names_json where is_narrator: true.
 4. For each segment add:
    - description: Provide concise acting instructions in natural language.
    - speed: Adjust the relative speaking rate on a non-linear scale from 0.25 (much slower) to 3.0 (much faster), where 1.0 represents normal speaking pace.
@@ -267,35 +222,26 @@ Your final output should be in the following JSON format:
   ]
 }}
 
-here's the roles_names_json and text:
+here's the roles_names_json and structured elements:
 
-<roles_names_json>
+roles_names_json:
 {roles_names_json}
-</roles_names_json>
 
-<text>
-{text_content}
-</text>
-"""
+structured_elements:
+{structured_elements_json}"""
+    
+    # Define API parameters once to avoid duplication
+    api_params = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 16384,
+        "temperature": 0.2,
+        "messages": [{"role": "user", "content": prompt}]
+    }
     
     # Log full Anthropics API segmentation request
-    logger.info("Anthropic API Segmentation Request", extra={"anthropic_request": {
-        "model": "claude-3-7-sonnet-20250219",
-        "max_tokens": 16384,
-        "temperature": 0.1,
-        "messages": [{"role": "user", "content": prompt}]
-    }})
-    response = anthropic_client.messages.create(
-        model="claude-3-7-sonnet-20250219", 
-        max_tokens=16384,
-        temperature=1, 
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
+    logger.info("Anthropic API Segmentation Request", extra={"anthropic_request": api_params})
+    
+    response = anthropic_client.messages.create(**api_params)
     
     response_content = response.content[0].text
     # Log full Anthropics API segmentation response
