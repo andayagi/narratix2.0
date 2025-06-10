@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import pytest
 import os
 import time
@@ -10,7 +11,7 @@ import httpx
 Interactive end-to-end script for the text-to-audio processing pipeline.
 
 To run this script:
-    python scripts/interactive_e2e_processing.py
+    python3 scripts/interactive_e2e_processing.py
 
 When running the script with pre-existing text, it will prompt you
 to choose whether to re-analyze or create new records.
@@ -199,7 +200,7 @@ def run_interactive_e2e_flow():
     try:
         # Ask user if they want to use input file or text_id
         print("\n----- Text Source Selection -----")
-        print("1. Use input file from scripts/input_interactive_e2e")
+        print("1. Use input file from scripts/input_interactive_e2e.txt")
         print("2. Use existing text_id")
         
         while True:
@@ -220,7 +221,7 @@ def run_interactive_e2e_flow():
         # Process based on user's choice
         if use_input_file:
             # Step 1: Read the text input file
-            input_file_path = os.path.join(PROJECT_ROOT, 'scripts', 'input_interactive_e2e')
+            input_file_path = os.path.join(PROJECT_ROOT, 'scripts', 'input_interactive_e2e.txt')
             text_content = read_file(input_file_path)
             if not text_content:
                 raise Exception("Input text file is empty")

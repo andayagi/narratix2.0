@@ -40,6 +40,11 @@ class Settings:
         self.OUTPUT_DIR = OUTPUT_DIR
         self.LOGS_DIR = LOGS_DIR
         self.AUDIO_STORAGE_PATH = os.getenv("AUDIO_STORAGE_PATH", str(AUDIO_DIR))
+        
+        # WhisperX/Force Alignment Configuration
+        self.WHISPERX_MODEL_SIZE = os.getenv("WHISPERX_MODEL_SIZE", "base")
+        self.WHISPERX_COMPUTE_TYPE = os.getenv("WHISPERX_COMPUTE_TYPE", "float32")
+        self.SOUND_EFFECTS_VOLUME_LEVEL = float(os.getenv("SOUND_EFFECTS_VOLUME_LEVEL", "0.3"))
 
 # Create a singleton settings instance
 settings = Settings()

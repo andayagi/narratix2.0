@@ -48,7 +48,7 @@ async def generate_character_voice(
     while retry_count < MAX_RETRIES:
         try:
             # Step 1: Generate speech to obtain generation_id
-            tts_response = await hume_client.tts.synthesize_json(
+            tts_stream = hume_client.tts.synthesize_json_streaming(
                 utterances=[
                     PostedUtterance(
                         text=character_intro_text,
@@ -57,11 +57,14 @@ async def generate_character_voice(
                 ]
             )
             
-            # Validate response structure before accessing indices
-            if not tts_response.generations:
-                raise ValueError("Missing 'generations' in API response")
-                
-            generation_id = tts_response.generations[0].generation_id
+            generation_id = None
+            async for chunk in tts_stream:
+                if hasattr(chunk, "generation_id"):
+                    generation_id = chunk.generation_id
+                    break
+
+            if not generation_id:
+                raise ValueError("Missing 'generation_id' in API response stream")
 
             # Step 2: Save the generated voice with naming format [name]_[text_id]
             voice_name = f"{character_name}_{text_id}"

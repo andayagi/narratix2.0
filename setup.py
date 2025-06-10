@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Narratix 2.0 Setup Script
 -------------------------
@@ -207,7 +207,7 @@ def main():
     print("\nNext steps:")
     print("1. Edit .env file with your actual database URL and API keys")
     print("2. Follow the implementation guide to add code to each file")
-    print("3. Run `python main.py` to start the application")
+    print("3. Run `python3 main.py` to start the application")
 
 if __name__ == "__main__":
     main()

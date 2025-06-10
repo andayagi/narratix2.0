@@ -6,7 +6,7 @@ import base64
 
 from db.database import get_db
 from db import crud, models
-from services import speech_generation, background_music, combine_export_audio
+from services import speech_generation, background_music, combine_export_audio, force_alignment
 from utils.config import settings
 
 router = APIRouter(
@@ -226,3 +226,35 @@ async def get_audio_file(
         audio_bytes = f.read()
     
     return Response(content=audio_bytes, media_type="audio/mpeg")
+
+@router.post("/text/{text_id}/force-align", response_model=Dict[str, Any])
+async def run_force_alignment_for_text(
+    text_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Run force alignment on the speech-only audio for a text.
+    This generates word-level timestamps.
+    """
+    db_text = crud.get_text(db, text_id)
+    if not db_text:
+        raise HTTPException(status_code=404, detail="Text not found")
+
+    # Check if segments have audio data
+    segments = crud.get_segments_by_text(db, text_id)
+    if not any(s.audio_data_b64 for s in segments):
+         raise HTTPException(status_code=400, detail="Speech has not been generated for this text's segments. Please generate audio first.")
+
+    success = force_alignment.run_force_alignment(db, text_id)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Force alignment failed.")
+
+    # Fetch the updated timestamps to return them
+    updated_text = crud.get_text(db, text_id)
+    
+    return {
+        "text_id": text_id,
+        "success": True,
+        "word_timestamps": updated_text.word_timestamps
+    }

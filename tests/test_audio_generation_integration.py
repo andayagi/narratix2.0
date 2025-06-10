@@ -10,6 +10,7 @@ SessionLogger.start_session(f"test_speech_generation_{datetime.now().strftime('%
 from db import models, crud
 from utils.config import settings
 from services.speech_generation import generate_text_audio
+from services.combine_export_audio import combine_speech_segments
 
 # Skip the test if HUME_API_KEY is not available or invalid
 if not settings.HUME_API_KEY or len(settings.HUME_API_KEY) < 10:
@@ -144,4 +145,23 @@ def test_generate_text_audio(db_session, test_text, test_male_character, test_fe
         except Exception as e:
             assert False, f"Failed to decode base64 for segment {segment.id}: {str(e)}"
     
-    print(f"Successfully generated audio data for {len(segments)} segments") 
+    print(f"Successfully generated audio data for {len(segments)} segments")
+
+    # --- Test audio export ---
+    print(f"Testing audio export for text {test_text.id}")
+    output_dir = "output/test_audio"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Use the combine_speech_segments function to export the audio
+    exported_audio_path = combine_speech_segments(db=db_session, text_id=test_text.id, output_dir=output_dir)
+
+    # Verify that the audio file was created
+    assert exported_audio_path is not None, "combine_speech_segments should return the path of the exported file"
+    assert os.path.exists(exported_audio_path), f"Exported audio file should exist at {exported_audio_path}"
+    assert os.path.getsize(exported_audio_path) > 1000, "Exported audio file should have a reasonable size"
+
+    print(f"Successfully exported audio to {exported_audio_path}")
+
+    # Optional: Clean up the exported file
+    # os.remove(exported_audio_path) 

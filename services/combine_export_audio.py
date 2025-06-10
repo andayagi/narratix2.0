@@ -303,16 +303,20 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
             fade_out_duration_s = 3
             fade_start_time_s = speech_start_delay_s + speech_duration
 
+            # Replaced -stream_loop with amovie filter for more reliable looping of background music,
+            # especially for long audio files. This prevents potential repetition issues.
+            filter_complex = (
+                f"amovie='{temp_norm_bg}':loop=0,asetpts=N/SR/TB[bg_raw];"
+                f"[0:a]adelay={speech_start_delay_s * 1000}|{speech_start_delay_s * 1000}[delayed];"
+                f"[bg_raw]volume={bg_volume},afade=t=out:st={fade_start_time_s}:d={fade_out_duration_s}[bg];"
+                f"[delayed]apad=pad_dur={fade_out_duration_s}[padded];"
+                f"[padded][bg]amix=inputs=2:duration=first"
+            )
+
             mix_cmd = [
                 'ffmpeg',
                 '-i', temp_norm_speech,  # Normalized speech
-                '-stream_loop', '-1',    # Loop background music
-                '-i', temp_norm_bg,      # Normalized background music
-                '-filter_complex',
-                f'[0:a]adelay={speech_start_delay_s * 1000}|{speech_start_delay_s * 1000}[delayed];'
-                f'[1:a]volume={bg_volume},afade=t=out:st={fade_start_time_s}:d={fade_out_duration_s}[bg];'
-                f'[delayed]apad=pad_dur={fade_out_duration_s}[padded];'
-                f'[padded][bg]amix=inputs=2:duration=first',
+                '-filter_complex', filter_complex,
                 '-c:a', 'libmp3lame',
                 '-q:a', '2',
                 '-y',

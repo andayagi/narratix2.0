@@ -1,7 +1,7 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Script to delete Hume voices with names that don't contain numbers
-Usage: python scripts/delete_hume_voice.py
+Usage: python3 scripts/delete_hume_voice.py
 """
 
 import os

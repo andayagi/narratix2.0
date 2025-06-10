@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
-from .endpoints import text, character, audio
+from .endpoints import text, character, audio, sound_effects
 from db.database import engine, Base
 from utils.config import settings
 from utils.logging import SessionLogger
@@ -37,6 +37,7 @@ app.add_middleware(
 app.include_router(text.router)
 app.include_router(character.router)
 app.include_router(audio.router)
+app.include_router(sound_effects.router)
 
 @app.get("/")
 async def root():

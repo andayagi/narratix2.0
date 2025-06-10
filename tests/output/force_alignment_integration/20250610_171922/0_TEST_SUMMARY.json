@@ -1,0 +1,17 @@
+{
+  "test_session_summary": {
+    "description": "Integration test results for force alignment service",
+    "output_directory": "20250610_171922",
+    "files_generated": {
+      "1_database_force_alignment.json": "Results from full database pipeline (combines segments \u2192 aligns \u2192 stores in DB)",
+      "2_direct_combined_audio_alignment.json": "Results from direct alignment on combined audio file",
+      "3_base64_single_segment_alignment.json": "Results from base64 processing of single segment",
+      "combined_speech_*.mp3": "Combined audio file from all segments"
+    },
+    "methods_compared": {
+      "database_pipeline": "Full workflow: DB segments \u2192 combine \u2192 align \u2192 store results",
+      "direct_combined_audio": "Direct alignment on pre-combined audio file",
+      "base64_single_segment": "Process individual segment from base64 data"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 fastapi==0.115.0
 uvicorn==0.30.0
-sqlalchemy==2.0.28
+sqlalchemy==2.0.38
 alembic==1.13.1
 pydantic==2.11.0
 python-dotenv==1.0.1
@@ -11,3 +11,14 @@ uuid==1.30
 pytest==7.4.3
 pytest-asyncio
 pydantic-settings
+hume==0.8.4
+replicate==1.0.7
+
+# AudioX integration for sound effects
+gradio_client>=0.18.0
+
+# WhisperX dependencies for force alignment
+whisperx>=3.1.1
+torch>=2.0.0
+torchaudio>=2.0.0
+faster-whisper>=0.9.0
