@@ -14,6 +14,7 @@ from utils.logging import get_logger
 from utils.config import settings
 from services.combine_export_audio import combine_speech_segments
 from db import crud
+from utils.timing import time_it
 
 logger = get_logger(__name__)
 
@@ -124,6 +125,7 @@ class ForceAlignmentService:
 # Global instance
 force_alignment_service = ForceAlignmentService()
 
+@time_it("force_alignment")
 def run_force_alignment(db: Session, text_id: int) -> bool:
     """
     Run force alignment for a text using speech-only audio segments.

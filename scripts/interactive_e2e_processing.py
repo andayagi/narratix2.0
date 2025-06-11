@@ -30,6 +30,8 @@ from utils.logging import SessionLogger
 import utils.http_client
 from services.background_music import process_background_music_for_text
 from services.combine_export_audio import export_final_audio
+from services.sound_effects import analyze_text_for_sound_effects, generate_and_store_effect
+from db import crud
 import shutil
 import tempfile
 
@@ -158,24 +160,27 @@ def prompt_action_for_existing_analyzed_text():
     print("Options:")
     print("1. Re-analyze (deletes existing characters, segments, and voices)")
     print("2. Re-generate audio (uses existing analysis)")
-    print("3. Generate bg music (uses existing speech audio segments)")
-    print("4. Combine audio (combine speech segments and bg music)")
-    print("5. Abort")
+    print("3. Generate sound effects (analyzes and generates sound effects)")
+    print("4. Generate bg music (uses existing speech audio segments)")
+    print("5. Combine audio (combine speech segments and bg music)")
+    print("6. Abort")
     
     while True:
-        choice = input("Enter your choice (1, 2, 3, 4, or 5): ").strip()
+        choice = input("Enter your choice (1, 2, 3, 4, 5, or 6): ").strip()
         if choice == "1":
             return "reanalyze"
         elif choice == "2":
             return "regenerate"
         elif choice == "3":
-            return "generate_bg_music"
+            return "generate_sound_effects"
         elif choice == "4":
-            return "combine_audio"
+            return "generate_bg_music"
         elif choice == "5":
+            return "combine_audio"
+        elif choice == "6":
             return "abort"
         else:
-            print("Invalid choice. Please enter 1, 2, 3, 4, or 5.")
+            print("Invalid choice. Please enter 1, 2, 3, 4, 5, or 6.")
 
 def get_audio_output_path(text_id):
     """Generate and create a date-based directory structure for audio output files"""
@@ -309,6 +314,8 @@ def run_interactive_e2e_flow():
                 elif action == "regenerate":
                     print(f"\n----- Re-generating audio using existing analysis -----")
                     # Skip analysis step, proceed to voice generation
+                elif action == "generate_sound_effects":
+                    print(f"\n----- Generating sound effects for existing text -----")
                 elif action == "generate_bg_music":
                     print(f"\n----- Generating background music using existing speech audio segments -----")
                     # Skip analysis and voice generation, proceed to bg music generation
@@ -361,6 +368,9 @@ def run_interactive_e2e_flow():
         # Skip voice generation for generate_bg_music option
         elif pre_existing and is_analyzed and has_characters and action == "generate_bg_music":
             pass
+        # Skip voice generation for generate_sound_effects option  
+        elif pre_existing and is_analyzed and has_characters and action == "generate_sound_effects":
+            pass
         else:
             # Generate a voice for each character
             for character in characters:
@@ -384,8 +394,8 @@ def run_interactive_e2e_flow():
                     print(f"Skipped voice generation for character: {character['name']} - {response_data.get('message')}")
         
         # Step 5: Generate speech audio for each segment
-        # Skip speech generation for generate_bg_music and combine_audio options
-        if pre_existing and is_analyzed and has_characters and (action == "generate_bg_music" or action == "combine_audio"):
+        # Skip speech generation for generate_bg_music, combine_audio, and generate_sound_effects options
+        if pre_existing and is_analyzed and has_characters and (action == "generate_bg_music" or action == "combine_audio" or action == "generate_sound_effects"):
             print(f"\n----- Using existing speech audio segments -----")
         else:
             print(f"\n----- Generating speech audio for segments -----")
@@ -399,9 +409,64 @@ def run_interactive_e2e_flow():
             print(f"\n----- Waiting for segment audio files to be saved -----")
             time.sleep(3)  # Wait for 3 seconds to ensure files are saved
 
-        # Step 5.5: Generate Background Music
-        # Skip bg music generation for combine_audio option
+        # Step 5.3: Generate Sound Effects (new step)
+        # Skip sound effects generation for combine_audio option
         if pre_existing and is_analyzed and has_characters and action == "combine_audio":
+            print(f"\n----- Using existing sound effects -----")
+        elif pre_existing and is_analyzed and has_characters and action == "generate_sound_effects":
+            # This is the main sound effects workflow
+            print(f"\n----- Analyzing text for sound effects -----")
+            db_session_sfx = None
+            try:
+                db_session_sfx = SessionLocal()
+                sound_effects = analyze_text_for_sound_effects(db_session_sfx, text_id)
+                print(f"Sound effects analysis completed: {len(sound_effects)} effects identified")
+                
+                if sound_effects:
+                    print(f"\n----- Generating sound effect audio -----")
+                    generate_all_sound_effects(db_session_sfx, text_id)
+                else:
+                    print("No sound effects identified for this text")
+            except Exception as e:
+                print(f"Error during sound effects processing: {str(e)}")
+                print("Warning: Proceeding without sound effects.")
+            finally:
+                if db_session_sfx:
+                    db_session_sfx.close()
+        else:
+            # For other actions, optionally run sound effects processing
+            print(f"\n----- Checking for existing sound effects -----")
+            db_session_sfx = None
+            try:
+                db_session_sfx = SessionLocal()
+                existing_sfx = crud.get_sound_effects_by_text(db_session_sfx, text_id)
+                
+                if not existing_sfx:
+                    print(f"No existing sound effects found. Running sound effects analysis...")
+                    sound_effects = analyze_text_for_sound_effects(db_session_sfx, text_id)
+                    print(f"Sound effects analysis completed: {len(sound_effects)} effects identified")
+                    
+                    if sound_effects:
+                        generate_all_sound_effects(db_session_sfx, text_id)
+                else:
+                    print(f"Found {len(existing_sfx)} existing sound effects")
+                    # Check if any need audio generation
+                    effects_without_audio = [sfx for sfx in existing_sfx if not sfx.audio_data_b64 or len(sfx.audio_data_b64) == 0]
+                    if effects_without_audio:
+                        print(f"Generating audio for {len(effects_without_audio)} sound effects without audio")
+                        generate_all_sound_effects(db_session_sfx, text_id)
+                    else:
+                        print("All sound effects already have audio")
+            except Exception as e:
+                print(f"Error during sound effects processing: {str(e)}")
+                print("Warning: Proceeding without sound effects.")
+            finally:
+                if db_session_sfx:
+                    db_session_sfx.close()
+
+        # Step 5.5: Generate Background Music
+        # Skip bg music generation for combine_audio and generate_sound_effects options
+        if pre_existing and is_analyzed and has_characters and (action == "combine_audio" or action == "generate_sound_effects"):
             print(f"\n----- Using existing background music -----")
         else:
             print(f"\n----- Generating background music -----")
@@ -466,6 +531,37 @@ def run_interactive_e2e_flow():
         print(f"\nERROR: Process failed: {str(e)}")
 
 # SessionLogger.start_session("test_end_to_end") # Commenting out pytest specific logging for now
+
+def generate_all_sound_effects(db_session, text_id):
+    """Generate audio for all sound effects of a text"""
+    print(f"\n----- Generating sound effect audio -----")
+    
+    # Get all sound effects for the text
+    sound_effects = crud.get_sound_effects_by_text(db_session, text_id)
+    
+    if not sound_effects:
+        print("No sound effects found for this text")
+        return
+    
+    print(f"Found {len(sound_effects)} sound effects to generate audio for")
+    
+    successful_generations = 0
+    for effect in sound_effects:
+        print(f"Generating audio for effect: {effect.effect_name}")
+        try:
+            generate_and_store_effect(db_session, effect.effect_id)
+            db_session.refresh(effect)
+            
+            # Check if audio was generated
+            if effect.audio_data_b64 and len(effect.audio_data_b64) > 0:
+                successful_generations += 1
+                print(f"✓ Successfully generated audio for {effect.effect_name}")
+            else:
+                print(f"✗ Failed to generate audio for {effect.effect_name}")
+        except Exception as e:
+            print(f"✗ Error generating audio for {effect.effect_name}: {str(e)}")
+    
+    print(f"Sound effect generation completed: {successful_generations}/{len(sound_effects)} successful") 
 
 if __name__ == "__main__":
     SessionLogger.start_session("interactive_e2e_script") # Start session for script run

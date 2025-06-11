@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from utils.config import Settings
 from utils.logging import get_logger
 from db import crud, models
+from utils.timing import time_it
 
 # Import the Hume SDK client
 from hume import AsyncHumeClient
@@ -19,6 +20,7 @@ MAX_RETRIES = 3
 # Delay between retries in seconds
 RETRY_DELAY = 1
 
+@time_it("generate_character_voice")
 async def generate_character_voice(
     db: Session, 
     character_id: int, 

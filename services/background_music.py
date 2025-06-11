@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from utils.config import settings
 from utils.logging import get_logger
 from db import crud, models
+from utils.timing import time_it
 
 # Initialize Anthropic client
 anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -16,6 +17,7 @@ anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 # Initialize logger
 logger = get_logger(__name__)
 
+@time_it("background_music_prompt_generation")
 def generate_background_music_prompt(db: Session, text_id: int) -> Optional[str]:
     """
     Generate a background music prompt using Claude for a text by ID.
@@ -144,6 +146,7 @@ def get_audio_duration(audio_file_path: str) -> float:
         logger.error(f"Error getting audio duration: {str(e)}")
         return 0
 
+@time_it("background_music_generation")
 def generate_background_music(db: Session, text_id: int) -> bool:
     """
     Phase 2: Generate background music using Replicate for a text by ID and store in DB.
@@ -283,16 +286,11 @@ def generate_background_music(db: Session, text_id: int) -> bool:
         crud.create_log(db=db, text_id=text_id, operation="background_music_generation_db", status="error", response={"error": f"Replicate download error: {str(req_e)}"})
         return False
     except Exception as e:
-        logger.error(f"Error generating background music and storing in DB: {str(e)}")
-        crud.create_log(
-            db=db,
-            text_id=text_id,
-            operation="background_music_generation_db",
-            status="error",
-            response={"error": str(e)}
-        )
+        logger.error(f"Error generating or storing background music: {str(e)}")
+        crud.create_log(db=db, text_id=text_id, operation="background_music_generation_db", status="error", response={"error": str(e)})
         return False
 
+@time_it("background_music_processing")
 def process_background_music_for_text(db: Session, text_id: int) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Complete end-to-end background music processing:

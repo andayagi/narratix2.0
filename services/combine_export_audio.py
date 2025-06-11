@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from utils.logging import get_logger
+from utils.timing import time_it
 from db import crud
 
 # Initialize logger
 logger = get_logger(__name__)
 
+@time_it("combine_speech_segments")
 def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, trailing_silence: float = 0.0) -> Optional[str]:
     """
     Combine all speech segments for a given text into a single audio file.
@@ -167,14 +169,16 @@ def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, t
         logger.error(f"Error combining speech segments: {str(e)}")
         return None
 
-def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_volume: float = 0.15, trailing_silence: float = 0.0, target_lufs: float = -18.0) -> Optional[str]:
+@time_it("export_final_audio")
+def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_volume: float = 0.15, trailing_silence: float = 0.0, target_lufs: float = -18.0, fx_volume: float = 0.3) -> Optional[str]:
     """
     Create a final audio export by:
     1. Combining all speech segments into one audio file
     2. Normalizing speech to target LUFS
-    3. Normalizing background music to target LUFS
-    4. Mixing normalized audio with speech starting 3 seconds after the music
-    5. Continue background music for 3 seconds after speech ends with fade out
+    3. Adding sound effects at their specified start_time positions
+    4. Normalizing background music to target LUFS
+    5. Mixing normalized audio with speech starting 3 seconds after the music
+    6. Continue background music for 3 seconds after speech ends with fade out
     
     Args:
         db: Database session
@@ -183,6 +187,7 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
         bg_volume: Background music volume (0.15 = 15%, optimal for graphic audio)
         trailing_silence: Amount of silence (in seconds) to add after each segment
         target_lufs: Target loudness in LUFS (-18.0 is standard for audiobooks)
+        fx_volume: Sound effects volume (0.3 = 30%, stronger than background music)
         
     Returns:
         Path to the final audio file, or None if error
@@ -204,62 +209,85 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         final_audio_path = os.path.join(output_dir, f"final_audio_{text_id}_{timestamp}.mp3")
         
-        # Get background music from database
-        db_text = crud.get_text(db, text_id)
-        if not db_text or not db_text.background_music_audio_b64:
-            logger.warning(f"No background music found in database for text {text_id}. Using normalized speech audio without background.")
-            # Apply normalization to speech only and return
-            normalized_speech_path = os.path.join(output_dir, f"normalized_speech_{text_id}_{timestamp}.mp3")
-            normalize_cmd = [
-                'ffmpeg',
-                '-i', combined_speech_path,
-                '-af', f'loudnorm=I={target_lufs}:TP=-1:LRA=5',
-                '-c:a', 'libmp3lame',
-                '-q:a', '2',
-                '-y',
-                normalized_speech_path
-            ]
-            result = subprocess.run(normalize_cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"Error normalizing speech audio: {result.stderr}")
-                return combined_speech_path  # Return unnormalized audio as fallback
-            return normalized_speech_path
-            
         # Create temporary files for processing
         temp_files = []
         
-        # Step 2: Create temporary file for background music
+        # Step 2: Normalize speech to target LUFS
+        temp_norm_speech_fd, temp_norm_speech = tempfile.mkstemp(suffix='.mp3')
+        os.close(temp_norm_speech_fd)
+        temp_files.append(temp_norm_speech)
+        
+        norm_speech_cmd = [
+            'ffmpeg',
+            '-i', combined_speech_path,
+            '-af', f'loudnorm=I={target_lufs}:TP=-1:LRA=5',
+            '-c:a', 'libmp3lame',
+            '-q:a', '2',
+            '-y',
+            temp_norm_speech
+        ]
+        result = subprocess.run(norm_speech_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"Error normalizing speech: {result.stderr}")
+            # Fall back to unnormalized speech
+            temp_norm_speech = combined_speech_path
+        
+        # Step 3: Process sound effects
+        logger.info(f"Processing sound effects for text ID {text_id}")
+        sound_effects = crud.get_sound_effects_by_text(db, text_id)
+        sound_effects_with_audio = []
+        
+        for effect in sound_effects:
+            # Skip effects without audio data or timing
+            if not effect.audio_data_b64 or effect.start_time is None:
+                logger.warning(f"Sound effect {effect.effect_id} ({effect.effect_name}) missing audio data or timing, skipping")
+                continue
+                
+            try:
+                # Decode base64 to binary
+                audio_bytes = base64.b64decode(effect.audio_data_b64)
+                
+                # Save to temporary file
+                temp_fx_fd, temp_fx_file = tempfile.mkstemp(suffix='.wav')
+                os.close(temp_fx_fd)
+                temp_files.append(temp_fx_file)
+                
+                with open(temp_fx_file, 'wb') as f:
+                    f.write(audio_bytes)
+                    
+                sound_effects_with_audio.append({
+                    "file": temp_fx_file,
+                    "start_time": effect.start_time,
+                    "effect_name": effect.effect_name
+                })
+                logger.info(f"Prepared sound effect '{effect.effect_name}' at {effect.start_time}s")
+                
+            except Exception as e:
+                logger.error(f"Error processing sound effect {effect.effect_id}: {str(e)}")
+                continue
+        
+        # Step 4: Get background music from database
+        db_text = crud.get_text(db, text_id)
+        if not db_text or not db_text.background_music_audio_b64:
+            logger.warning(f"No background music found for text {text_id}")
+            # Mix speech with sound effects only
+            if sound_effects_with_audio:
+                return _mix_speech_with_sound_effects(temp_norm_speech, sound_effects_with_audio, fx_volume, final_audio_path, temp_files)
+            else:
+                # Return normalized speech only
+                return temp_norm_speech
+        
+        # Step 5: Process background music
         temp_bg_fd, temp_bg_file = tempfile.mkstemp(suffix='.mp3')
         os.close(temp_bg_fd)
         temp_files.append(temp_bg_file)
         
-        # Step 3: Save background music to temp file
         try:
             audio_bytes = base64.b64decode(db_text.background_music_audio_b64)
             with open(temp_bg_file, 'wb') as f:
                 f.write(audio_bytes)
             
-            # Step 4: Normalize speech to target LUFS
-            temp_norm_speech_fd, temp_norm_speech = tempfile.mkstemp(suffix='.mp3')
-            os.close(temp_norm_speech_fd)
-            temp_files.append(temp_norm_speech)
-            
-            norm_speech_cmd = [
-                'ffmpeg',
-                '-i', combined_speech_path,
-                '-af', f'loudnorm=I={target_lufs}:TP=-1:LRA=5',
-                '-c:a', 'libmp3lame',
-                '-q:a', '2',
-                '-y',
-                temp_norm_speech
-            ]
-            result = subprocess.run(norm_speech_cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"Error normalizing speech: {result.stderr}")
-                # Fall back to unnormalized speech
-                temp_norm_speech = combined_speech_path
-            
-            # Step 5: Normalize background music to same target LUFS
+            # Normalize background music to same target LUFS
             temp_norm_bg_fd, temp_norm_bg = tempfile.mkstemp(suffix='.mp3')
             os.close(temp_norm_bg_fd)
             temp_files.append(temp_norm_bg)
@@ -276,7 +304,6 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
             result = subprocess.run(norm_bg_cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 logger.error(f"Error normalizing background music: {result.stderr}")
-                # Fall back to unnormalized bg music
                 temp_norm_bg = temp_bg_file
             
             # Step 6: Get duration of speech audio
@@ -298,24 +325,40 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
                     logger.error("Could not parse speech duration")
                     speech_duration = 0
             
-            # Step 7: Mix normalized files with proper volume adjustment and fade out
+            # Step 7: Build complex filter for mixing all layers
             speech_start_delay_s = 3
             fade_out_duration_s = 3
             fade_start_time_s = speech_start_delay_s + speech_duration
-
-            # Replaced -stream_loop with amovie filter for more reliable looping of background music,
-            # especially for long audio files. This prevents potential repetition issues.
-            filter_complex = (
-                f"amovie='{temp_norm_bg}':loop=0,asetpts=N/SR/TB[bg_raw];"
-                f"[0:a]adelay={speech_start_delay_s * 1000}|{speech_start_delay_s * 1000}[delayed];"
-                f"[bg_raw]volume={bg_volume},afade=t=out:st={fade_start_time_s}:d={fade_out_duration_s}[bg];"
-                f"[delayed]apad=pad_dur={fade_out_duration_s}[padded];"
-                f"[padded][bg]amix=inputs=2:duration=first"
-            )
-
+            
+            # Start building filter complex
+            filter_parts = []
+            input_files = [temp_norm_speech]
+            
+            # Background music with loop and fade
+            filter_parts.append(f"amovie='{temp_norm_bg}':loop=0,asetpts=N/SR/TB[bg_raw]")
+            filter_parts.append(f"[0:a]adelay={speech_start_delay_s * 1000}|{speech_start_delay_s * 1000}[delayed_speech]")
+            filter_parts.append(f"[bg_raw]volume={bg_volume},afade=t=out:st={fade_start_time_s}:d={fade_out_duration_s}[bg]")
+            filter_parts.append(f"[delayed_speech]apad=pad_dur={fade_out_duration_s}[padded_speech]")
+            
+            # Add sound effects
+            mix_inputs = ["[padded_speech]", "[bg]"]
+            if sound_effects_with_audio:
+                for i, fx in enumerate(sound_effects_with_audio):
+                    fx_label = f"fx{i}"
+                    delay_ms = int(fx["start_time"] * 1000)
+                    filter_parts.append(f"amovie='{fx['file']}',volume={fx_volume},adelay={delay_ms}|{delay_ms}[{fx_label}]")
+                    mix_inputs.append(f"[{fx_label}]")
+                    logger.info(f"Added sound effect '{fx['effect_name']}' at {fx['start_time']}s with volume {fx_volume}")
+            
+            # Final mix
+            num_inputs = len(mix_inputs)
+            filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={num_inputs}:duration=first")
+            
+            filter_complex = ";".join(filter_parts)
+            
             mix_cmd = [
                 'ffmpeg',
-                '-i', temp_norm_speech,  # Normalized speech
+                '-i', temp_norm_speech,
                 '-filter_complex', filter_complex,
                 '-c:a', 'libmp3lame',
                 '-q:a', '2',
@@ -326,15 +369,14 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
             result = subprocess.run(mix_cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 logger.error(f"Error creating final mixed audio: {result.stderr}")
-                # Return normalized speech as fallback
                 return temp_norm_speech
                 
-            logger.info(f"Successfully created final audio: {final_audio_path} at target {target_lufs} LUFS with {bg_volume*100}% background music and 3-second fade out")
+            logger.info(f"Successfully created final audio: {final_audio_path} at target {target_lufs} LUFS with {bg_volume*100}% background music, {fx_volume*100}% sound effects, and 3-second fade out")
             return final_audio_path
             
         except Exception as e:
             logger.error(f"Error processing audio: {str(e)}")
-            return combined_speech_path  # Return original combined speech as fallback
+            return combined_speech_path
             
         finally:
             # Clean up temporary files
@@ -347,4 +389,58 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
                 
     except Exception as e:
         logger.error(f"Error exporting final audio: {str(e)}")
-        return None 
+        return None
+
+def _mix_speech_with_sound_effects(speech_file: str, sound_effects: List[dict], fx_volume: float, output_path: str, temp_files: List[str]) -> str:
+    """
+    Helper function to mix speech with sound effects only (no background music).
+    
+    Args:
+        speech_file: Path to the speech audio file
+        sound_effects: List of sound effect dictionaries with file paths and timing
+        fx_volume: Volume for sound effects
+        output_path: Output file path
+        temp_files: List to track temporary files for cleanup
+        
+    Returns:
+        Path to the mixed audio file
+    """
+    try:
+        # Build filter for mixing speech with sound effects
+        filter_parts = []
+        mix_inputs = ["[0:a]"]
+        
+        # Add sound effects
+        for i, fx in enumerate(sound_effects):
+            fx_label = f"fx{i}"
+            delay_ms = int(fx["start_time"] * 1000)
+            filter_parts.append(f"amovie='{fx['file']}',volume={fx_volume},adelay={delay_ms}|{delay_ms}[{fx_label}]")
+            mix_inputs.append(f"[{fx_label}]")
+        
+        # Final mix
+        num_inputs = len(mix_inputs)
+        filter_parts.append(f"{''.join(mix_inputs)}amix=inputs={num_inputs}:duration=first")
+        
+        filter_complex = ";".join(filter_parts)
+        
+        mix_cmd = [
+            'ffmpeg',
+            '-i', speech_file,
+            '-filter_complex', filter_complex,
+            '-c:a', 'libmp3lame',
+            '-q:a', '2',
+            '-y',
+            output_path
+        ]
+        
+        result = subprocess.run(mix_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"Error mixing speech with sound effects: {result.stderr}")
+            return speech_file
+            
+        logger.info(f"Successfully mixed speech with {len(sound_effects)} sound effects at {fx_volume*100}% volume")
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"Error mixing speech with sound effects: {str(e)}")
+        return speech_file 

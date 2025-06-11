@@ -8,6 +8,7 @@ from utils.config import settings
 from utils.logging import get_logger
 from db import crud, models
 from datetime import datetime
+from utils.timing import time_it
 
 # Initialize Anthropic client which will use our patched HTTP transport
 anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -109,6 +110,7 @@ def _extract_json_from_response(response_text: str) -> Dict[str, Any]:
         else:
             raise ValueError(f"Invalid JSON response: {e}")
 
+@time_it("analyze_text_phase1_characters")
 def analyze_text_phase1_characters(text_content: str) -> List[CharacterDetail]:
     """Phase 1: Identify characters using Claude Haiku."""
     prompt = f"""your job is to put together a list of characters for voiceover, so only speaking characters and narrator (if exist).
@@ -176,6 +178,7 @@ Now analyze this text:
 
     return characters_data
 
+@time_it("analyze_text_phase2_segmentation")
 def analyze_text_phase2_segmentation(text_content: str, characters: List[CharacterDetail]) -> List[NarrativeElement]:
     """Phase 2: Segment text and add voice instructions using improved approach with internal text structure analysis."""
     
@@ -250,7 +253,7 @@ structured_elements:
     
     return analysis.get("narrative_elements", [])
 
-# This function now orchestrates the two calls
+@time_it("get_text_analysis_results")
 def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDetail], List[NarrativeElement]]:
     """
     Orchestrates the two-phase text analysis using Anthropic API calls.
@@ -284,6 +287,7 @@ def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDeta
         
     return characters, narrative_elements
 
+@time_it("process_text_analysis")
 def process_text_analysis(db: Session, text_id: int, content: str) -> models.Text:
     """
     Process text analysis using the two-phase approach and save results to database.

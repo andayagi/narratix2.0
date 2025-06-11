@@ -8,6 +8,7 @@ from utils.logging import get_logger
 from db import crud
 from services.force_alignment import get_word_timestamps_for_text
 from services.combine_export_audio import combine_speech_segments
+from utils.timing import time_it
 
 # Import Hume SDK
 from hume import HumeClient
@@ -23,6 +24,7 @@ RETRY_DELAY = 5
 # Timeout for HTTP requests in seconds (100 minutes)
 HTTP_TIMEOUT = 6000.0
 
+@time_it("speech_generation")
 def generate_text_audio(db: Session, text_id: int) -> bool:
     """
     Generate audio for all segments of a text with batched processing
