@@ -14,6 +14,12 @@ fi
 # Path to test file
 TEST_FILE=${1:-"tests/test_voice_generation_integration.py"}
 
-# Run pytest with verbose output
-echo "Running integration test with real API calls: $TEST_FILE"
-python -m pytest -xvs "$TEST_FILE" 
+# Check for specific webhook integration tests
+if [[ "$1" == *"webhook"* ]]; then
+    echo "Running webhook integration tests (with mocked APIs for safety)..."
+    python -m pytest -xvs "tests/test_webhook_integration.py"
+else
+    # Run pytest with verbose output
+    echo "Running integration test with real API calls: $TEST_FILE"
+    python -m pytest -xvs "$TEST_FILE"
+fi 

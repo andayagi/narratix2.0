@@ -1,11 +1,104 @@
-import httpx
-import json
-from typing import Dict, Any, Optional, Union, List, Callable
-from utils.logging import get_logger, SessionLogger
-from utils.http_patch import patch_httpx
+"""
+Shared HTTP client utilities for optimized connection reuse across services.
+Supports both synchronous and asynchronous operations for parallel processing.
+"""
 
-# Initialize HTTP patching to enable request logging for all clients
-patch_httpx()
+import httpx
+import requests
+from typing import Optional
+import threading
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Global HTTP clients with connection pooling
+_sync_client: Optional[requests.Session] = None
+_async_client: Optional[httpx.AsyncClient] = None
+_client_lock = threading.Lock()
+
+# HTTP client configuration
+HTTP_TIMEOUT = 300  # 5 minutes for audio generation requests
+CONNECTION_POOL_SIZE = 25  # Match database pool size
+MAX_CONNECTIONS = 35      # Match database max overflow
+
+def get_sync_client() -> requests.Session:
+    """
+    Get a shared synchronous HTTP client with connection pooling.
+    Thread-safe singleton pattern.
+    """
+    global _sync_client
+    
+    if _sync_client is None:
+        with _client_lock:
+            if _sync_client is None:
+                _sync_client = requests.Session()
+                
+                # Configure connection pooling
+                adapter = requests.adapters.HTTPAdapter(
+                    pool_connections=CONNECTION_POOL_SIZE,
+                    pool_maxsize=MAX_CONNECTIONS,
+                    max_retries=3
+                )
+                _sync_client.mount('http://', adapter)
+                _sync_client.mount('https://', adapter)
+                
+                # Set timeout
+                _sync_client.timeout = HTTP_TIMEOUT
+                
+                logger.info(f"Initialized shared sync HTTP client with {CONNECTION_POOL_SIZE} pool connections")
+    
+    return _sync_client
+
+def get_async_client() -> httpx.AsyncClient:
+    """
+    Get a shared asynchronous HTTP client with connection pooling.
+    Thread-safe singleton pattern.
+    """
+    global _async_client
+    
+    if _async_client is None:
+        with _client_lock:
+            if _async_client is None:
+                limits = httpx.Limits(
+                    max_keepalive_connections=CONNECTION_POOL_SIZE,
+                    max_connections=MAX_CONNECTIONS
+                )
+                
+                _async_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(HTTP_TIMEOUT),
+                    limits=limits
+                )
+                
+                logger.info(f"Initialized shared async HTTP client with {CONNECTION_POOL_SIZE} pool connections")
+    
+    return _async_client
+
+async def close_async_client():
+    """Close the shared async HTTP client."""
+    global _async_client
+    
+    if _async_client is not None:
+        with _client_lock:
+            if _async_client is not None:
+                await _async_client.aclose()
+                _async_client = None
+                logger.info("Closed shared async HTTP client")
+
+def close_sync_client():
+    """Close the shared sync HTTP client."""
+    global _sync_client
+    
+    if _sync_client is not None:
+        with _client_lock:
+            if _sync_client is not None:
+                _sync_client.close()
+                _sync_client = None
+                logger.info("Closed shared sync HTTP client")
+
+def cleanup_clients():
+    """Close all shared HTTP clients. Call this on application shutdown."""
+    close_sync_client()
+    # Note: async client requires await, so it should be closed separately in async context
 
 def create_client(timeout: float = 60.0, **kwargs) -> httpx.Client:
     """

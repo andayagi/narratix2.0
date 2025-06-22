@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
+import warnings
 
 from db.database import get_db
 from db import crud, models
@@ -94,7 +95,17 @@ async def analyze_text_endpoint(
     force: bool = False,
     db: Session = Depends(get_db)
 ):
-    """Analyze a text to extract characters and segments"""
+    """
+    ⚠️ DEPRECATED: Use /api/text-analysis/{text_id}/analyze instead
+    
+    Analyze a text to extract characters and segments
+    """
+    warnings.warn(
+        "This endpoint is deprecated. Use /api/text-analysis/{text_id}/analyze instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
     db_text = crud.get_text(db, text_id)
     if not db_text:
         raise HTTPException(status_code=404, detail="Text not found")
@@ -109,7 +120,7 @@ async def analyze_text_endpoint(
         }
     
     # Analyze text
-    text_analysis.process_text_analysis(db, text_id, db_text.content)
+    await text_analysis.process_text_analysis(db, text_id, db_text.content)
     
     # Return updated text
     db_text = crud.get_text(db, text_id)

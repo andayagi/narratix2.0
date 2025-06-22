@@ -5,7 +5,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.force_alignment import ForceAlignmentService, force_alignment_service
+from services.combine_export_audio import ForceAlignmentService, force_alignment_service
 from utils.logging import get_logger
 
 logger = get_logger(__name__)

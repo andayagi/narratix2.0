@@ -3,10 +3,11 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 import os
 import base64
+import warnings
 
 from db.database import get_db
 from db import crud, models
-from services import speech_generation, background_music, combine_export_audio, force_alignment
+from services import speech_generation, background_music, combine_export_audio
 from utils.config import settings
 
 router = APIRouter(
@@ -65,7 +66,17 @@ async def generate_background_music(
     text_id: int,
     db: Session = Depends(get_db)
 ):
-    """Generate background music for a text"""
+    """
+    ⚠️ DEPRECATED: Use /api/background-music/{text_id}/process instead
+    
+    Generate background music for a text
+    """
+    warnings.warn(
+        "This endpoint is deprecated. Use /api/background-music/{text_id}/process instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
     db_text = crud.get_text(db, text_id)
     if not db_text:
         raise HTTPException(status_code=404, detail="Text not found")
@@ -79,7 +90,8 @@ async def generate_background_music(
     return {
         "text_id": text_id,
         "prompt": prompt,
-        "music_file": music_file
+        "music_file": music_file,
+        "warning": "⚠️ This endpoint is deprecated. Use /api/background-music/{text_id}/process instead."
     }
 
 @router.get("/text/{text_id}/background-music", response_model=Dict[str, Any])
@@ -87,7 +99,17 @@ async def get_background_music_status(
     text_id: int,
     db: Session = Depends(get_db)
 ):
-    """Get background music status for a text"""
+    """
+    ⚠️ DEPRECATED: Use /api/background-music/{text_id} instead
+    
+    Get background music status for a text
+    """
+    warnings.warn(
+        "This endpoint is deprecated. Use /api/background-music/{text_id} instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
     db_text = crud.get_text(db, text_id)
     if not db_text:
         raise HTTPException(status_code=404, detail="Text not found")
@@ -98,7 +120,8 @@ async def get_background_music_status(
             "text_id": text_id,
             "status": "not_generated",
             "prompt": None,
-            "music_file": None
+            "music_file": None,
+            "warning": "⚠️ This endpoint is deprecated. Use /api/background-music/{text_id} instead."
         }
     
     # Check if background music file exists
@@ -110,14 +133,16 @@ async def get_background_music_status(
             "text_id": text_id,
             "status": "generated",
             "prompt": db_text.background_music_prompt,
-            "music_file": bg_music_file
+            "music_file": bg_music_file,
+            "warning": "⚠️ This endpoint is deprecated. Use /api/background-music/{text_id} instead."
         }
     else:
         return {
             "text_id": text_id,
             "status": "prompt_only",
             "prompt": db_text.background_music_prompt,
-            "music_file": None
+            "music_file": None,
+            "warning": "⚠️ This endpoint is deprecated. Use /api/background-music/{text_id} instead."
         }
 
 @router.post("/text/{text_id}/export", response_model=Dict[str, Any])
@@ -125,7 +150,17 @@ async def export_final_audio(
     text_id: int,
     db: Session = Depends(get_db)
 ):
-    """Export final audio with background music for a text"""
+    """
+    ⚠️ DEPRECATED: Use /api/export/{text_id}/final-audio instead
+    
+    Export final audio with background music for a text
+    """
+    warnings.warn(
+        "This endpoint is deprecated. Use /api/export/{text_id}/final-audio instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
     db_text = crud.get_text(db, text_id)
     if not db_text:
         raise HTTPException(status_code=404, detail="Text not found")
@@ -145,7 +180,8 @@ async def export_final_audio(
     
     return {
         "text_id": text_id,
-        "audio_file": audio_file
+        "audio_file": audio_file,
+        "warning": "⚠️ This endpoint is deprecated. Use /api/export/{text_id}/final-audio instead."
     }
 
 @router.get("/text/{text_id}", response_model=Dict[str, Any])
@@ -233,9 +269,17 @@ async def run_force_alignment_for_text(
     db: Session = Depends(get_db)
 ):
     """
+    ⚠️ DEPRECATED: Use /api/export/{text_id}/force-align instead
+    
     Run force alignment on the speech-only audio for a text.
     This generates word-level timestamps.
     """
+    warnings.warn(
+        "This endpoint is deprecated. Use /api/export/{text_id}/force-align instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
     db_text = crud.get_text(db, text_id)
     if not db_text:
         raise HTTPException(status_code=404, detail="Text not found")
@@ -245,7 +289,10 @@ async def run_force_alignment_for_text(
     if not any(s.audio_data_b64 for s in segments):
          raise HTTPException(status_code=400, detail="Speech has not been generated for this text's segments. Please generate audio first.")
 
-    success = force_alignment.run_force_alignment(db, text_id)
+    # Force alignment is now handled automatically in combine_speech_segments
+    # Just trigger the combine process which will run force alignment
+    combined_audio_path = combine_export_audio.combine_speech_segments(db, text_id)
+    success = combined_audio_path is not None
 
     if not success:
         raise HTTPException(status_code=500, detail="Force alignment failed.")
@@ -256,5 +303,6 @@ async def run_force_alignment_for_text(
     return {
         "text_id": text_id,
         "success": True,
-        "word_timestamps": updated_text.word_timestamps
+        "word_timestamps": updated_text.word_timestamps,
+        "warning": "⚠️ This endpoint is deprecated. Use /api/export/{text_id}/force-align instead."
     }

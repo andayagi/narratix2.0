@@ -16,7 +16,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from db import models, crud
-from services.force_alignment import run_force_alignment, get_word_timestamps_for_text
+from services.combine_export_audio import _run_force_alignment_on_combined_audio, force_alignment_service
 from services.combine_export_audio import combine_speech_segments
 from utils.logging import get_logger
 
@@ -238,7 +238,7 @@ def test_force_alignment_with_combined_audio(db_session: Session, test_text_with
 @pytest.mark.integration
 def test_force_alignment_from_base64(db_session: Session, test_segments_data, shared_test_data):
     """Test force alignment directly from base64 audio data"""
-    from services.force_alignment import get_word_timestamps_from_base64
+    from services.combine_export_audio import force_alignment_service
     
     output_dir = get_test_output_dir()
     
@@ -250,8 +250,15 @@ def test_force_alignment_from_base64(db_session: Session, test_segments_data, sh
     
     test_text = "This is a test story."
     
-    # Get word timestamps from base64
-    word_timestamps = get_word_timestamps_from_base64(audio_b64, test_text)
+    # Get word timestamps from base64 - using temporary file approach since we moved alignment to audio file processing
+    with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+        temp_file.write(audio_bytes)
+        temp_file_path = temp_file.name
+    
+    try:
+        word_timestamps = force_alignment_service.get_word_timestamps(temp_file_path, test_text)
+    finally:
+        os.remove(temp_file_path)
     
     if word_timestamps:
         # Output results

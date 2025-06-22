@@ -122,6 +122,22 @@ ProcessLog
 - `POST /api/text/{text_id}/generate-audio` - Generate audio for text
 - `GET /api/text/{text_id}/audio` - Get generated audio
 
+### Text Analysis
+- `POST /api/text-analysis/{text_id}/analyze` - Trigger (re)analysis
+- `GET /api/text-analysis/{text_id}` - Get analysis results
+- `GET /api/text-analysis/{text_id}/characters` - Get extracted characters
+- `GET /api/text-analysis/{text_id}/segments` - Get text segments
+
+#### Background Music  
+- `POST /api/background-music/{text_id}/process` - Generate background music
+- `GET /api/background-music/{text_id}` - Get music status
+- `GET /api/background-music/{text_id}/audio` - Download music file
+
+#### Export Audio
+- `POST /api/export/{text_id}/final-audio` - Export final mixed audio
+- `POST /api/export/{text_id}/force-align` - Run force alignment
+- `GET /api/export/{text_id}/download/{filename}` - Download exported files
+
 ## Environment Setup
 
 ### Required Environment Variables

@@ -1,6 +1,7 @@
 from anthropic import Anthropic
 import json
 import re
+import os
 from typing import Dict, List, Tuple, Any, TypedDict
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -9,12 +10,81 @@ from utils.logging import get_logger
 from db import crud, models
 from datetime import datetime
 from utils.timing import time_it
+from hume import AsyncHumeClient
 
 # Initialize Anthropic client which will use our patched HTTP transport
 anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 # Initialize regular logger
 logger = get_logger(__name__)
+
+async def _delete_existing_hume_voices(text_id: int):
+    """Delete existing Hume voices for a text_id before reanalysis"""
+    try:
+        # Get API key
+        api_key = os.getenv("HUME_API_KEY") or settings.HUME_API_KEY
+        if not api_key:
+            logger.warning("No Hume API key found, skipping voice deletion")
+            return
+            
+        # Initialize Hume client
+        hume_client = AsyncHumeClient(api_key=api_key)
+        
+        # List all custom voices
+        voices_response = await hume_client.tts.voices.list(provider="CUSTOM_VOICE")
+        # AsyncPager needs to be iterated through, not accessed via page_items
+        voices = []
+        async for voice in voices_response:
+            voices.append(voice)
+        
+        # Find and delete voices that end with "_[text_id]"
+        target_suffix = f"_{text_id}"
+        deleted_count = 0
+        
+        for voice in voices:
+            if hasattr(voice, "name") and (
+                voice.name.endswith(target_suffix) or 
+                voice.name.lower().endswith(target_suffix.lower())
+            ):
+                try:
+                    logger.info(f"Deleting existing voice '{voice.name}' for text reanalysis")
+                    await hume_client.tts.voices.delete(name=voice.name)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete voice '{voice.name}': {str(e)}")
+        
+        if deleted_count > 0:
+            logger.info(f"Successfully deleted {deleted_count} existing voice(s) for text_id {text_id}")
+        else:
+            logger.info(f"No existing voices found for text_id {text_id}")
+            
+    except Exception as e:
+        logger.error(f"Error deleting existing Hume voices for text_id {text_id}: {str(e)}")
+        # Don't raise - voice deletion failure shouldn't stop text analysis
+
+def _clear_character_voices_in_db(db: Session, text_id: int):
+    """Clear provider_id values for all characters of a text_id"""
+    try:
+        # Get all characters for this text
+        characters = crud.get_characters_by_text(db, text_id)
+        cleared_count = 0
+        
+        for character in characters:
+            if character.provider_id:
+                logger.info(f"Clearing voice provider_id for character '{character.name}' (was: {character.provider_id})")
+                character.provider_id = None
+                character.provider = None
+                cleared_count += 1
+        
+        if cleared_count > 0:
+            db.commit()
+            logger.info(f"Cleared {cleared_count} character voice provider_ids for text_id {text_id}")
+        else:
+            logger.info(f"No character voices to clear for text_id {text_id}")
+            
+    except Exception as e:
+        logger.error(f"Error clearing character voices in database for text_id {text_id}: {str(e)}")
+        # Don't raise - this shouldn't stop text analysis
 
 def _analyze_text_structure(text):
     """
@@ -168,11 +238,17 @@ Now analyze this text:
     # Map the API's 'text' field to our internal 'intro_text'
     characters_data = []
     for char_data in analysis.get("characters", []):
+        persona_description = char_data.get("persona_description", "")
+        
+        # Replace child/kid variations with "childish"
+        if persona_description:
+            persona_description = re.sub(r'\b(child|kid|children|kids|childlike|kidlike)\b', 'childish', persona_description, flags=re.IGNORECASE)
+        
         characters_data.append({
             "name": char_data.get("name"),
             "is_narrator": char_data.get("is_narrator"),
             "speaking": char_data.get("speaking"),
-            "persona_description": char_data.get("persona_description"),
+            "persona_description": persona_description,
             "intro_text": char_data.get("text") # Mapping
         })
 
@@ -288,7 +364,7 @@ def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDeta
     return characters, narrative_elements
 
 @time_it("process_text_analysis")
-def process_text_analysis(db: Session, text_id: int, content: str) -> models.Text:
+async def process_text_analysis(db: Session, text_id: int, content: str) -> models.Text:
     """
     Process text analysis using the two-phase approach and save results to database.
     """
@@ -303,6 +379,15 @@ def process_text_analysis(db: Session, text_id: int, content: str) -> models.Tex
     db_text = crud.get_text(db, text_id)
     if not db_text:
         raise ValueError(f"Text with ID {text_id} not found in database")
+    
+    # Delete existing Hume voices and clear database provider_ids before reanalysis
+    await _delete_existing_hume_voices(text_id)
+    _clear_character_voices_in_db(db, text_id)
+    
+    # Delete existing character records and segments from database before creating new ones
+    deleted_segments = crud.delete_segments_by_text(db, text_id)
+    deleted_characters = crud.delete_characters_by_text(db, text_id)
+    print(f"Deleted {deleted_characters} existing characters and {deleted_segments} segments for text {text_id}")
     
     db_text.analyzed = True
     db.commit()
@@ -356,3 +441,23 @@ def process_text_analysis(db: Session, text_id: int, content: str) -> models.Tex
     print(f"Processed text {text_id}: Created {len(db_characters)} characters and {len(db_segments)} segments.")
     
     return db_text 
+
+# New async versions for parallel processing
+@time_it("async_process_text_analysis")
+async def process_text_analysis_async(db: Session, text_id: int, content: str) -> models.Text:
+    """
+    Async version of process_text_analysis for parallel processing.
+    
+    Args:
+        db: Database session
+        text_id: ID of the text to process
+        content: Text content to analyze
+        
+    Returns:
+        Updated Text model
+    """
+    import asyncio
+    
+    # Run the synchronous function in a thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, process_text_analysis, db, text_id, content) 

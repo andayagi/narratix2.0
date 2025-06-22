@@ -8,6 +8,7 @@ import base64
 from sqlalchemy.orm import Session
 from utils.config import settings
 from utils.logging import get_logger
+from utils.http_client import get_sync_client
 from db import crud, models
 from utils.timing import time_it
 
@@ -20,7 +21,7 @@ logger = get_logger(__name__)
 @time_it("background_music_prompt_generation")
 def generate_background_music_prompt(db: Session, text_id: int) -> Optional[str]:
     """
-    Generate a background music prompt using Claude for a text by ID.
+    Generate a background music prompt using unified audio analysis.
     
     Args:
         db: Database session
@@ -29,51 +30,19 @@ def generate_background_music_prompt(db: Session, text_id: int) -> Optional[str]
     Returns:
         The generated background music prompt, or None if error
     """
-    # Get text content from database
-    db_text = crud.get_text(db, text_id)
-    if not db_text:
-        logger.error(f"Text with ID {text_id} not found")
-        return None
-    
-    text_content = db_text.content
-    
-    # Log full Anthropic API request
-    logger.info("Anthropic API Request for background music", extra={"anthropic_request": {
-        "model": "claude-3-5-haiku-20241022",
-        "max_tokens": 536,
-        "temperature": 0.7,
-        "system": "output only what was asked, no explanatory text",
-        "messages": [{"role": "user", "content": f"Describe in a short paragraph (60 words) the background audio\\music for this text. mention the genre of the book. Focus on concrete instructions like background noises, tempo, instrumentation (if any), rhythm, and musical motifs. \n1-2 sentences.\n{text_content}"}]
-    }})
+    from services.audio_analysis import analyze_text_for_audio
     
     try:
-        response = anthropic_client.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=536,
-            temperature=0.7,
-            system="output only what was asked, no explanatory text ",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"Describe in a short paragraph (60 words) the background audio\\music for this text. mention the genre of the book. Focus on concrete instructions like background noises, tempo, instrumentation (if any), rhythm, and musical motifs. \n1-2 sentences.\n{text_content}"
-                        }
-                    ]
-                }
-            ])
+        # Use unified analysis to get soundscape
+        soundscape, _ = analyze_text_for_audio(db, text_id)
         
-        # Log full Anthropic API response
-        logger.info("Anthropic API Response for background music", extra={"anthropic_response": response.content})
-        
-        # Extract the prompt from the response
-        music_prompt = response.content[0].text
-        
-        # Store the prompt in the database
-        update_text_with_music_prompt(db, text_id, music_prompt)
-        
-        return music_prompt
+        if soundscape:
+            # Store the prompt in the database
+            update_text_with_music_prompt(db, text_id, soundscape)
+            return soundscape
+        else:
+            logger.error(f"No soundscape generated for text {text_id}")
+            return None
     
     except Exception as e:
         logger.error(f"Error generating background music prompt: {str(e)}")
@@ -149,15 +118,17 @@ def get_audio_duration(audio_file_path: str) -> float:
 @time_it("background_music_generation")
 def generate_background_music(db: Session, text_id: int) -> bool:
     """
-    Phase 2: Generate background music using Replicate for a text by ID and store in DB.
+    Phase 2: Generate background music using Replicate webhook for a text by ID.
     
     Args:
         db: Database session
         text_id: ID of the text to generate background music for
         
     Returns:
-        True if music was generated and stored in DB successfully, False otherwise.
+        True if webhook was successfully triggered, False otherwise.
     """
+    from services.replicate_audio import create_webhook_prediction, ReplicateAudioConfig
+    
     try:
         # Get the background music prompt from the database
         db_text = crud.get_text(db, text_id)
@@ -173,128 +144,80 @@ def generate_background_music(db: Session, text_id: int) -> bool:
             logger.error(f"No segments found for text with ID {text_id}")
             return False
         
-        # Check for segments with audio_data_b64
-        import tempfile
+        # Estimate speech duration based on text content (character-based estimation)
+        total_chars = sum(len(segment.text or "") for segment in segments)
         
-        # First, calculate total speech duration from all segments
-        total_speech_duration = 0
-        temp_files = []
+        # Estimate: ~150 words/minute, ~5 chars/word, 60 seconds/minute
+        # So: chars_per_second = (150 * 5) / 60 = 12.5
+        estimated_speech_duration = total_chars / 12.5
         
-        for segment in segments:
-            if segment.audio_data_b64:
-                try:
-                    audio_bytes = base64.b64decode(segment.audio_data_b64)
-                    fd, temp_path = tempfile.mkstemp(suffix='.mp3')
-                    os.close(fd)
-                    
-                    with open(temp_path, 'wb') as f:
-                        f.write(audio_bytes)
-                    
-                    temp_files.append(temp_path)
-                    segment_duration = get_audio_duration(temp_path)
-                    if segment_duration > 0:
-                        total_speech_duration += segment_duration
-                        logger.info(f"Segment {segment.id} duration: {segment_duration} seconds")
-                    else:
-                        logger.warning(f"Could not determine duration for segment {segment.id}")
-                except Exception as temp_file_error:
-                    logger.error(f"Error creating temporary file from audio_data_b64: {str(temp_file_error)}")
-                    continue
-        
-        if total_speech_duration <= 0:
-            logger.error(f"Could not determine speech duration for any segments of text with ID {text_id}")
+        if estimated_speech_duration <= 0:
+            logger.error(f"Could not estimate speech duration for text with ID {text_id} (no text content)")
             return False
             
-        try:
-            # Calculate sum of trailing_silence from all segments
-            total_trailing_silence = sum(segment.trailing_silence for segment in segments if segment.trailing_silence)
-            
-            # Music should be at least as long as total speech + trailing silence + 6 seconds
-            total_duration = total_speech_duration + total_trailing_silence + 6
-            # Round to the nearest integer - Replicate API doesn't accept fractional durations
-            music_duration = int(round(total_duration))
-            
-            logger.info(f"Generating background music with prompt: {music_prompt}", 
-                       extra={"music_prompt": music_prompt, 
-                              "total_speech_duration": total_speech_duration,
-                              "total_trailing_silence": total_trailing_silence,
-                              "calculated_duration": total_duration,
-                              "final_music_duration": music_duration})
-            
-            output_url = replicate.run(
-                "ardianfe/music-gen-fn-200e:96af46316252ddea4c6614e31861876183b59dce84bad765f38424e87919dd85",
-                input={
-                    "prompt": music_prompt,
-                    "duration": music_duration,
-                    "output_format": "mp3",
-                    "temperature": 1,
-                    "top_k": 250,
-                    "top_p": 0,
-                    "classifier_free_guidance": 3
-                }
+        # Calculate sum of trailing_silence from all segments
+        total_trailing_silence = sum(segment.trailing_silence for segment in segments if segment.trailing_silence)
+        
+        # Music should be at least as long as estimated speech + trailing silence + 10 seconds
+        total_duration = estimated_speech_duration + total_trailing_silence + 10
+        # Round to the nearest integer - Replicate API doesn't accept fractional durations
+        music_duration = int(round(total_duration))
+        
+        logger.info(f"Generating background music with prompt: {music_prompt}", 
+                   extra={"music_prompt": music_prompt, 
+                          "total_chars": total_chars,
+                          "estimated_speech_duration": estimated_speech_duration,
+                          "total_trailing_silence": total_trailing_silence,
+                          "calculated_duration": total_duration,
+                          "final_music_duration": music_duration})
+        
+        # Create ReplicateAudioConfig with background music parameters
+        config = ReplicateAudioConfig(
+            version="96af46316252ddea4c6614e31861876183b59dce84bad765f38424e87919dd85",
+            input={
+                "prompt": music_prompt,
+                "duration": music_duration,
+                "output_format": "mp3",
+                "temperature": 1,
+                "top_k": 250,
+                "top_p": 0,
+                "classifier_free_guidance": 3
+            }
+        )
+        
+        # Trigger webhook prediction and return immediately
+        prediction_id = create_webhook_prediction("background_music", text_id, config)
+        if prediction_id:
+            logger.info(f"Background music generation webhook triggered for text {text_id}, prediction ID: {prediction_id}")
+            crud.create_log(
+                db=db,
+                text_id=text_id,
+                operation="background_music_generation_webhook_trigger",
+                status="success",
+                response={"prediction_id": prediction_id, "message": "Webhook triggered successfully"}
             )
-            
-            if not output_url:
-                logger.error("No output URL received from Replicate API")
-                crud.create_log(db=db, text_id=text_id, operation="background_music_generation_db", status="error", response={"error": "No output URL from Replicate"})
-                return False
-            
-            import requests
-            
-            # Download the music data
-            response = requests.get(output_url)
-            response.raise_for_status()
-            audio_bytes = response.content
-            
-            # Encode to base64
-            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-            
-            # Store base64 audio in the database using CRUD function
-            updated_text = crud.update_text_background_music_audio(db, text_id, audio_base64)
-            if updated_text:
-                logger.info(f"Successfully generated and stored background music in DB for text {text_id}")
-                crud.create_log(
-                    db=db,
-                    text_id=text_id,
-                    operation="background_music_generation_db",
-                    status="success",
-                    response={"message": "Background music stored in DB"}
-                )
-                return True
-            else:
-                logger.error(f"Failed to update text with ID {text_id} with background music audio")
-                crud.create_log(
-                    db=db,
-                    text_id=text_id,
-                    operation="background_music_generation_db",
-                    status="error",
-                    response={"error": "Failed to update text with background music audio"}
-                )
-                return False
-        finally:
-            # Clean up temporary files
-            for temp_file in temp_files:
-                if os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                        logger.info(f"Removed temporary audio file: {temp_file}")
-                    except Exception as cleanup_error:
-                        logger.error(f"Error removing temporary file: {str(cleanup_error)}")
+            return True
+        else:
+            logger.error(f"Failed to trigger background music generation webhook for text {text_id}")
+            crud.create_log(
+                db=db,
+                text_id=text_id,
+                operation="background_music_generation_webhook_trigger",
+                status="error",
+                response={"error": "Failed to trigger webhook"}
+            )
+            return False
 
-    except requests.exceptions.RequestException as req_e:
-        logger.error(f"Error downloading background music from Replicate: {str(req_e)}")
-        crud.create_log(db=db, text_id=text_id, operation="background_music_generation_db", status="error", response={"error": f"Replicate download error: {str(req_e)}"})
-        return False
     except Exception as e:
-        logger.error(f"Error generating or storing background music: {str(e)}")
-        crud.create_log(db=db, text_id=text_id, operation="background_music_generation_db", status="error", response={"error": str(e)})
+        logger.error(f"Error triggering background music generation webhook: {str(e)}")
+        crud.create_log(db=db, text_id=text_id, operation="background_music_generation_webhook_trigger", status="error", response={"error": str(e)})
         return False
 
 @time_it("background_music_processing")
-def process_background_music_for_text(db: Session, text_id: int) -> Tuple[bool, Optional[str], Optional[str]]:
+def process_background_music_for_text(db: Session, text_id: int) -> Tuple[bool, Optional[str], bool]:
     """
-    Complete end-to-end background music processing:
-    1. Generate a prompt with Claude
+    Complete end-to-end background music processing using unified audio analysis:
+    1. Generate a prompt with unified analysis
     2. Generate music with Replicate using the prompt and store in DB
     
     Args:
@@ -304,6 +227,8 @@ def process_background_music_for_text(db: Session, text_id: int) -> Tuple[bool, 
     Returns:
         Tuple of (prompt_success, music_prompt_or_none, music_generation_success)
     """
+    from services.audio_analysis import analyze_text_for_audio
+    
     # First check if the text exists
     db_text = crud.get_text(db, text_id)
     if not db_text:
@@ -317,20 +242,66 @@ def process_background_music_for_text(db: Session, text_id: int) -> Tuple[bool, 
     if has_existing_prompt or has_existing_audio:
         logger.info(f"Text ID {text_id} already has background music prompt: {has_existing_prompt}, audio: {has_existing_audio}. Will overwrite.")
     
-    # Phase 1: Generate prompt
-    music_prompt = generate_background_music_prompt(db, text_id)
-    if not music_prompt:
-        return False, None, False
+    try:
+        # Phase 1: Generate prompt using unified analysis
+        soundscape, _ = analyze_text_for_audio(db, text_id)
+        if not soundscape:
+            logger.error(f"No soundscape generated for text {text_id}")
+            return False, None, False
+        
+        # Store the prompt
+        update_text_with_music_prompt(db, text_id, soundscape)
+        
+        # Phase 2: Generate music and store in DB
+        music_generated_and_stored = generate_background_music(db, text_id)
+        if not music_generated_and_stored:
+            return True, soundscape, False
+        
+        # Verify that the music was actually stored
+        db.refresh(db_text)
+        if not db_text.background_music_audio_b64:
+            logger.error(f"Background music generation reported success but audio is not in database for text ID {text_id}")
+            return True, soundscape, False
+        
+        return True, soundscape, True
+        
+    except Exception as e:
+        logger.error(f"Error in background music processing: {e}")
+        return False, None, False 
+
+# New async versions for parallel processing
+@time_it("async_background_music_generation")
+async def generate_background_music_async(db: Session, text_id: int) -> bool:
+    """
+    Async version of generate_background_music for parallel processing.
     
-    # Phase 2: Generate music and store in DB
-    music_generated_and_stored = generate_background_music(db, text_id)
-    if not music_generated_and_stored:
-        return True, music_prompt, False
+    Args:
+        db: Database session
+        text_id: ID of the text to generate background music for
+        
+    Returns:
+        True if music was generated and stored in DB successfully, False otherwise.
+    """
+    import asyncio
     
-    # Verify that the music was actually stored
-    db.refresh(db_text)
-    if not db_text.background_music_audio_b64:
-        logger.error(f"Background music generation reported success but audio is not in database for text ID {text_id}")
-        return True, music_prompt, False
+    # Run the synchronous function in a thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, generate_background_music, db, text_id)
+
+@time_it("async_background_music_processing")
+async def process_background_music_for_text_async(db: Session, text_id: int) -> Tuple[bool, Optional[str], bool]:
+    """
+    Async version of process_background_music_for_text for parallel processing.
     
-    return True, music_prompt, True 
+    Args:
+        db: Database session
+        text_id: ID of the text to process
+        
+    Returns:
+        Tuple of (prompt_success, music_prompt_or_none, music_generation_success)
+    """
+    import asyncio
+    
+    # Run the synchronous function in a thread pool to avoid blocking
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, process_background_music_for_text, db, text_id) 

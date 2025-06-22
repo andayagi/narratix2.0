@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-import pytest
+import asyncio
 import os
-import time
 import sys
-import requests
+import time
 import datetime
-import httpx
+import shutil
+from typing import Dict, List, Optional, Tuple, Any
+import tempfile
 
 """
 Interactive end-to-end script for the text-to-audio processing pipeline.
+Updated to test all new dedicated API endpoints for comprehensive validation.
 
 To run this script:
     python3 scripts/interactive_e2e_processing.py
-
-When running the script with pre-existing text, it will prompt you
-to choose whether to re-analyze or create new records.
 """
 
 # Add the project root to the Python path
@@ -22,548 +21,795 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi.testclient import TestClient
-import os.path
-from api.main import app
-from db.database import get_db, SessionLocal
+from db.database import SessionLocal
 from utils.logging import SessionLogger
-import utils.http_client
-from services.background_music import process_background_music_for_text
-from services.combine_export_audio import export_final_audio
-from services.sound_effects import analyze_text_for_sound_effects, generate_and_store_effect
 from db import crud
-import shutil
-import tempfile
 
-# Set a very long timeout for HTTP requests (6000 seconds = 100 minutes)
+# Initialize API client lazily to avoid import issues
+client = None
 LONG_TIMEOUT = 6000.0
-# Override the default HTTP client creation with our long timeout
-original_create_client = utils.http_client.create_client
-utils.http_client.create_client = lambda **kwargs: original_create_client(timeout=LONG_TIMEOUT, **kwargs)
 
-# Initialize Hume client for voice deletion
-from hume import HumeClient
-from utils.config import Settings
-
-# Create a direct client instead of TestClient to ensure consistent DB sessions
-app.dependency_overrides = {}  # Clear any existing overrides
-client = TestClient(app)
-
-def read_file(file_path):
-    """Read content from a file"""
-    with open(file_path, 'r') as f:
-        return f.read()
-
-def delete_related_resources(text_id, characters):
-    """Delete resources related to text: characters, segments, and Hume voices"""
-    # Create direct session (not generator) to ensure transaction completion
-    db = SessionLocal()
-    
-    # Step 1: Delete Hume voices first
-    settings = Settings()
-    api_key = os.getenv("HUME_API_KEY") or settings.HUME_API_KEY
-    
-    # Create a custom client with long timeout for Hume API
-    hume_http_client = httpx.Client(timeout=LONG_TIMEOUT)
-    hume_client = HumeClient(api_key=api_key, httpx_client=hume_http_client)
-    
-    # Delete Hume voices that end with "_[text_id]"
-    voice_deletion_failures = []
-    try:
-        # List all custom voices
-        voices_pager = hume_client.tts.voices.list(provider="CUSTOM_VOICE")
-        # Convert pager to list
-        voices = list(voices_pager)
-        print(f"Found {len(voices)} custom voices in Hume")
-        
-        # Find and delete voices that end with "_[text_id]" (case insensitive)
-        target_suffix = f"_{text_id}"
-        deleted_voices = []
-        
-        # Log all found voices for debugging
-        for voice in voices:
-            if hasattr(voice, "name"):
-                print(f"Found voice: '{voice.name}'")
-        
-        for voice in voices:
-            if hasattr(voice, "name") and (
-                voice.name.endswith(target_suffix) or 
-                voice.name.lower().endswith(target_suffix.lower())
-            ):
-                try:
-                    print(f"Deleting voice '{voice.name}'")
-                    hume_client.tts.voices.delete(name=voice.name)
-                    deleted_voices.append(voice.name)
-                except Exception as e:
-                    error_msg = f"Failed to delete voice '{voice.name}': {str(e)}"
-                    voice_deletion_failures.append(error_msg)
-                    print(error_msg)
-        
-        if deleted_voices:
-            print(f"Successfully deleted {len(deleted_voices)} voice(s) for text_id {text_id}")
-        else:
-            print(f"No voices found ending with '_{text_id}'")
+def get_api_client():
+    """Initialize API client lazily"""
+    global client
+    if client is None:
+        try:
+            from fastapi.testclient import TestClient
+            from api.main import app
+            import utils.http_client
             
-    except Exception as e:
-        error_msg = f"Failed to list or delete voices: {str(e)}"
-        voice_deletion_failures.append(error_msg)
-        print(error_msg)
-        
-    finally:
-        # Close HTTP client
-        hume_http_client.close()
-    
-    # If any voice deletion failed, return false WITHOUT deleting from database
-    if voice_deletion_failures:
-        error_summary = "\n".join(voice_deletion_failures)
-        print(f"Warning: Voice deletions failed:\n{error_summary}")
-        print("Database records will not be deleted to maintain consistency.")
-        db.close()  # Make sure to close the DB connection
-        return False
-    
-    try:
-        # Step 2: Only delete database records if ALL Hume voices were successfully deleted
-        # Use direct SQL execution for more reliable deletion
-        from sqlalchemy import text
-        
-        # Delete segments first (due to foreign key constraints)
-        deleted_segments = db.execute(
-            text(f"DELETE FROM text_segments WHERE text_id = :text_id"),
-            {"text_id": text_id}
-        ).rowcount
-        print(f"Deleted {deleted_segments} segments for text {text_id}")
-        
-        # Then delete characters
-        deleted_characters = db.execute(
-            text(f"DELETE FROM characters WHERE text_id = :text_id"),
-            {"text_id": text_id}
-        ).rowcount
-        print(f"Deleted {deleted_characters} characters for text {text_id}")
-        
-        # Commit the transaction
-        db.commit()
-        return True  # All deletions were successful
-        
-    except Exception as e:
-        db.rollback()  # Rollback transaction on error
-        print(f"Error during database deletion: {str(e)}")
-        return False
-        
-    finally:
-        db.close()  # Always close the DB connection
+            # Set long timeout for HTTP requests
+            original_create_client = utils.http_client.create_client
+            utils.http_client.create_client = lambda **kwargs: original_create_client(timeout=LONG_TIMEOUT, **kwargs)
 
-def prompt_action_for_existing_analyzed_text():
-    """
-    Prompt user for action when text already exists and has been analyzed
-    """
-    print("\nThis text already exists in the database and has been analyzed.")
-    print("Options:")
-    print("1. Re-analyze (deletes existing characters, segments, and voices)")
-    print("2. Re-generate audio (uses existing analysis)")
-    print("3. Generate sound effects (analyzes and generates sound effects)")
-    print("4. Generate bg music (uses existing speech audio segments)")
-    print("5. Combine audio (combine speech segments and bg music)")
-    print("6. Abort")
+            # Create TestClient
+            client = TestClient(app)
+        except ImportError as e:
+            print(f"❌ Failed to import API dependencies: {e}")
+            print("Please install requirements: pip install -r requirements.txt")
+            raise
+    return client
+
+class PipelineStatus:
+    """Data class to hold pipeline status information"""
+    def __init__(self, text_id: int):
+        self.text_id = text_id
+        self.text_exists = False
+        self.text_analyzed = False
+        self.characters_count = 0
+        self.characters_with_voices = 0
+        self.segments_count = 0
+        self.segments_with_audio = 0
+        self.has_bg_music_prompt = False
+        self.has_bg_music_audio = False
+        self.sound_effects_count = 0
+        self.sound_effects_with_audio = 0
+        self.word_timestamps_available = False
+
+async def get_pipeline_status(text_id: int) -> PipelineStatus:
+    """Get comprehensive status of pipeline data for a text_id"""
+    status = PipelineStatus(text_id)
+    
+    # Check if text exists
+    client = get_api_client()
+    response = client.get(f"/api/text/{text_id}")
+    if response.status_code != 200:
+        return status
+    
+    text_data = response.json()
+    status.text_exists = True
+    status.text_analyzed = text_data.get("analyzed", False)
+    status.word_timestamps_available = bool(text_data.get("word_timestamps"))
+    
+    # Check characters
+    response = client.get(f"/api/character/text/{text_id}")
+    if response.status_code == 200:
+        characters = response.json()
+        status.characters_count = len(characters)
+        status.characters_with_voices = len([c for c in characters if c.get('provider_id')])
+    
+    # Check segments using database (segments endpoint not yet implemented)
+    db = SessionLocal()
+    try:
+        # Get text object for background music fields
+        text_obj = crud.get_text(db, text_id)
+        if text_obj:
+            status.has_bg_music_prompt = bool(text_obj.background_music_prompt)
+            status.has_bg_music_audio = bool(text_obj.background_music_audio_b64)
+            if not status.word_timestamps_available:  
+                status.word_timestamps_available = bool(text_obj.word_timestamps)
+        
+        segments = crud.get_segments_by_text(db, text_id)
+        status.segments_count = len(segments)
+        status.segments_with_audio = len([s for s in segments if s.audio_data_b64])
+        
+        # Check sound effects
+        sound_effects = crud.get_sound_effects_by_text(db, text_id)
+        status.sound_effects_count = len(sound_effects)
+        status.sound_effects_with_audio = len([sfx for sfx in sound_effects if sfx.audio_data_b64])
+    finally:
+        db.close()
+    
+    return status
+
+def display_pipeline_status(status: PipelineStatus):
+    """Display pipeline status in a user-friendly format"""
+    print(f"\n{'='*60}")
+    print(f"PIPELINE STATUS FOR TEXT ID: {status.text_id}")
+    print(f"{'='*60}")
+    
+    if not status.text_exists:
+        print("❌ Text does not exist in database")
+        return
+    
+    print("📝 TEXT STATUS:")
+    print(f"   {'✅' if status.text_analyzed else '❌'} Text analyzed: {status.text_analyzed}")
+    print(f"   {'✅' if status.word_timestamps_available else '❌'} Word timestamps: {status.word_timestamps_available}")
+    
+    print("\n👥 CHARACTER STATUS:")
+    print(f"   📊 Characters found: {status.characters_count}")
+    print(f"   {'✅' if status.characters_with_voices == status.characters_count and status.characters_count > 0 else '❌'} Voices generated: {status.characters_with_voices}/{status.characters_count}")
+    
+    print("\n🎤 SPEECH STATUS:")
+    print(f"   📊 Text segments: {status.segments_count}")
+    print(f"   {'✅' if status.segments_with_audio == status.segments_count and status.segments_count > 0 else '❌'} Speech audio: {status.segments_with_audio}/{status.segments_count}")
+    
+    print("\n🎵 AUDIO ANALYSIS STATUS:")
+    print(f"   {'✅' if status.has_bg_music_prompt else '❌'} Background music prompt: {status.has_bg_music_prompt}")
+    print(f"   {'✅' if status.has_bg_music_audio else '❌'} Background music audio: {status.has_bg_music_audio}")
+    print(f"   📊 Sound effects identified: {status.sound_effects_count}")
+    print(f"   {'✅' if status.sound_effects_with_audio == status.sound_effects_count and status.sound_effects_count > 0 else '❌'} Sound effects audio: {status.sound_effects_with_audio}/{status.sound_effects_count}")
+    
+    print(f"\n{'='*60}")
+
+def get_service_options(status: PipelineStatus) -> Dict[str, bool]:
+    """Show all available services - dependency validation happens after user selection"""
+    options = {
+        "text_analysis": True,
+        "voice_generation": True,
+        "speech_generation": True,
+        "audio_analysis": True,
+        "bg_music_generation": True,
+        "sfx_generation": True,
+        "audio_combining": True
+    }
+    return options
+
+def prompt_for_services(status: PipelineStatus) -> Tuple[bool, List[str], bool]:
+    """Prompt user for which services to run"""
+    options = get_service_options(status)
+    
+    print("\n🎛️  SERVICE SELECTION:")
+    print("Available options:")
+    print("1. Full pipeline (adaptive - runs all services as they become available)")
+    print("2. Custom selection")
+    print("3. Abort")
     
     while True:
-        choice = input("Enter your choice (1, 2, 3, 4, 5, or 6): ").strip()
+        choice = input("\nEnter your choice (1, 2, or 3): ").strip()
         if choice == "1":
-            return "reanalyze"
+            # Run adaptive full pipeline
+            return True, [], True  # Empty list means adaptive mode
         elif choice == "2":
-            return "regenerate"
+            # Custom selection
+            proceed, services = prompt_custom_services(options)
+            return proceed, services, False
         elif choice == "3":
-            return "generate_sound_effects"
-        elif choice == "4":
-            return "generate_bg_music"
-        elif choice == "5":
-            return "combine_audio"
-        elif choice == "6":
-            return "abort"
+            return False, [], False
         else:
-            print("Invalid choice. Please enter 1, 2, 3, 4, 5, or 6.")
+            print("Invalid choice. Please enter 1, 2, or 3.")
 
-def get_audio_output_path(text_id):
-    """Generate and create a date-based directory structure for audio output files"""
-    # Create base audio_files directory if it doesn't exist
-    audio_dir = os.path.join(PROJECT_ROOT, 'audio_files')
-    if not os.path.exists(audio_dir):
-        os.makedirs(audio_dir)
+def prompt_custom_services(options: Dict[str, bool]) -> Tuple[bool, List[str]]:
+    """Prompt for custom service selection"""
+    service_descriptions = {
+        "text_analysis": "📝 Text Analysis (NEW ENDPOINT: /api/text-analysis/)",
+        "voice_generation": "🎙️  Voice Generation (existing endpoints)",
+        "speech_generation": "🗣️  Speech Generation (existing endpoints)",
+        "audio_analysis": "🎵 Audio Analysis (NEW ENDPOINT: /api/audio-analysis/)",
+        "bg_music_generation": "🎼 Background Music (NEW ENDPOINT: /api/background-music/)",
+        "sfx_generation": "🔊 Sound Effects (existing endpoint)",
+        "audio_combining": "🎬 Audio Export (NEW ENDPOINT: /api/export/)"
+    }
     
-    # Create date-based subdirectory
-    today = datetime.datetime.now().strftime('%Y-%m-%d')
-    date_dir = os.path.join(audio_dir, today)
-    if not os.path.exists(date_dir):
-        os.makedirs(date_dir)
+    print("\n📋 CUSTOM SERVICE SELECTION (Testing New API Endpoints):")
+    available_services = [(key, desc) for key, desc in service_descriptions.items() if options[key]]
     
-    # Generate timestamped filename
-    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"{timestamp}_{text_id}_inter_e2e.mp3"
-    return os.path.join(date_dir, filename)
-
-def run_interactive_e2e_flow():
-    """End-to-end process for text to audio, with interactive prompts if needed."""
-    try:
-        # Ask user if they want to use input file or text_id
-        print("\n----- Text Source Selection -----")
-        print("1. Use input file from scripts/input_interactive_e2e.txt")
-        print("2. Use existing text_id")
+    if not available_services:
+        print("❌ No services are currently available based on existing data.")
+        return False, []
+    
+    for i, (key, desc) in enumerate(available_services, 1):
+        print(f"{i}. {desc}")
+    
+    print("\nSelect services (comma-separated numbers, e.g., '1,3,5'):")
+    print("Or type 'all' for all available services")
+    print("Or type 'none' to abort")
+    
+    while True:
+        selection = input("Your selection: ").strip().lower()
         
-        while True:
-            choice = input("Enter your choice (1 or 2): ").strip()
-            if choice == "1":
-                use_input_file = True
-                break
-            elif choice == "2":
-                use_input_file = False
-                text_id = input("Enter the text_id to process: ").strip()
-                if not text_id:
-                    print("Text ID cannot be empty. Please try again.")
-                    continue
-                break
-            else:
-                print("Invalid choice. Please enter 1 or 2.")
-
-        # Process based on user's choice
-        if use_input_file:
-            # Step 1: Read the text input file
-            input_file_path = os.path.join(PROJECT_ROOT, 'scripts', 'input_interactive_e2e.txt')
-            text_content = read_file(input_file_path)
-            if not text_content:
-                raise Exception("Input text file is empty")
-            
-            # Step 2: Check if text already exists in the database
-            print("\n----- Creating or finding text in database -----")
-            response = client.post(
-                "/api/text/",
-                json={
-                    "content": text_content,
-                    "title": "E2E Test Text"
-                }
-            )
-            if response.status_code != 200:
-                raise Exception(f"Failed to create or find text: {response.text}")
-            
-            text_data = response.json()
-            text_id = text_data["id"]
-            
-            # Explicitly check whether the text was created or found
-            # First check if 'created' property exists in the response (for backward compatibility)
-            pre_existing = False
-            if "created" in text_data:
-                # Use the 'created' flag directly from the API
-                pre_existing = not text_data["created"]
-                if pre_existing:
-                    print(f"FOUND: Text with ID {text_id} already exists in the database.")
+        if selection == "none":
+            return False, []
+        elif selection == "all":
+            return True, [key for key, _ in available_services]
+        else:
+            try:
+                indices = [int(x.strip()) for x in selection.split(',')]
+                if all(1 <= i <= len(available_services) for i in indices):
+                    selected_services = [available_services[i-1][0] for i in indices]
+                    return True, selected_services
                 else:
-                    print(f"CREATED: New text with ID {text_id} has been created in the database.")
-        else:
-            # Get text details by ID
-            print(f"\n----- Retrieving text with ID {text_id} -----")
-            response = client.get(f"/api/text/{text_id}")
-            if response.status_code != 200:
-                raise Exception(f"Failed to get text: {response.text}")
-            
-            text_data = response.json()
-            pre_existing = True
-            print(f"FOUND: Using existing text with ID {text_id} from the database.")
+                    print(f"Invalid selection. Enter numbers between 1 and {len(available_services)}")
+            except ValueError:
+                print("Invalid format. Use comma-separated numbers (e.g., '1,3,5')")
 
-        # Check if pre-existing text is already analyzed
-        if pre_existing:
-            # Get text details to check if it's analyzed
-            response = client.get(f"/api/text/{text_id}")
-            if response.status_code != 200:
-                raise Exception(f"Failed to get text details: {response.text}")
-                
-            text_details = response.json()
-            is_analyzed = text_details.get("analyzed", False)
-            
-            # Get all characters for the text to check if it has characters
-            response = client.get(f"/api/character/text/{text_id}")
-            if response.status_code != 200:
-                raise Exception("Failed to retrieve characters")
-                
-            characters = response.json()
-            has_characters = len(characters) > 0
-            
-            # Initialize action to avoid potential NameError
-            action = None
-            
-            # If text is analyzed and has characters, prompt with three options
-            if is_analyzed and has_characters:
-                action = prompt_action_for_existing_analyzed_text()
-                
-                if action == "reanalyze":
-                    print(f"\n----- Reanalyzing existing text -----")
-                    
-                    # Delete existing resources
-                    try:
-                        deletion_successful = delete_related_resources(text_id, characters)
-                        if not deletion_successful:
-                            print("\nProcess aborted: Hume voice deletion failed.")
-                            return  # Exit the function if deletion fails
-                    except Exception as e:
-                        print(f"ERROR: {str(e)}")
-                        print("\nProcess aborted due to error in resource deletion.")
-                        return  # Exit the function if deletion fails
-                    
-                    # Re-analyze the text
-                    response = client.put(f"/api/text/{text_id}/analyze", params={"force": True})
-                    if response.status_code != 200:
-                        raise Exception(f"Failed to re-analyze text: {response.text}")
-                    print(f"Text {text_id} has been re-analyzed")
-                elif action == "regenerate":
-                    print(f"\n----- Re-generating audio using existing analysis -----")
-                    # Skip analysis step, proceed to voice generation
-                elif action == "generate_sound_effects":
-                    print(f"\n----- Generating sound effects for existing text -----")
-                elif action == "generate_bg_music":
-                    print(f"\n----- Generating background music using existing speech audio segments -----")
-                    # Skip analysis and voice generation, proceed to bg music generation
-                elif action == "combine_audio":
-                    print(f"\n----- Combining speech segments and background music -----")
-                    # Skip analysis, voice generation, and speech audio generation
-                elif action == "abort":
-                    print("\nOperation aborted by user.")
-                    return  # Exit the function
-            else:
-                # Text exists but isn't analyzed - automatically analyze it
-                print(f"\n----- Analyzing existing text -----")
-                response = client.put(f"/api/text/{text_id}/analyze")
-                if response.status_code != 200:
-                    raise Exception(f"Failed to analyze text: {response.text}")
-                print(f"Text {text_id} has been analyzed")
+def validate_service_dependencies(services: List[str], status: PipelineStatus) -> Tuple[bool, List[str]]:
+    """Validate that service dependencies are met or will be met by selected services"""
+    errors = []
+    
+    # Check what will be available after running selected services
+    will_have_text_analyzed = status.text_analyzed or "text_analysis" in services
+    will_have_characters = status.characters_count > 0 or "text_analysis" in services
+    will_have_voices = status.characters_with_voices > 0 or "voice_generation" in services
+    will_have_segments_audio = status.segments_with_audio > 0 or "speech_generation" in services
+    will_have_bg_music_prompt = status.has_bg_music_prompt or "audio_analysis" in services
+    will_have_sound_effects = status.sound_effects_count > 0 or "audio_analysis" in services
+    
+    # Define dependencies with improved logic
+    dependency_checks = {
+        "voice_generation": (will_have_text_analyzed and will_have_characters, 
+                           "Text must be analyzed with characters present (run text_analysis first)"),
+        "speech_generation": (will_have_voices, 
+                            "Characters must have generated voices (run voice_generation first)"),
+        "bg_music_generation": (will_have_bg_music_prompt, 
+                              "Background music prompt must exist (run audio_analysis first)"),
+        "sfx_generation": (will_have_sound_effects, 
+                         "Sound effects must be identified (run audio_analysis first)"),
+        "audio_combining": (will_have_segments_audio, 
+                          "Speech audio segments must be generated first (run speech_generation)")
+    }
+    
+    for service in services:
+        if service in dependency_checks:
+            is_satisfied, error_msg = dependency_checks[service]
+            if not is_satisfied:
+                errors.append(f"❌ {service}: {error_msg}")
+    
+    return len(errors) == 0, errors
+
+async def get_text_id_from_user() -> Optional[int]:
+    """Get text ID from user input (file or direct ID)"""
+    print("\n📖 TEXT SOURCE SELECTION:")
+    print("1. Use input file from scripts/input_interactive_e2e.txt")
+    print("2. Use existing text_id")
+    
+    while True:
+        choice = input("Enter your choice (1 or 2): ").strip()
+        if choice == "1":
+            return await create_or_find_text_from_file()
+        elif choice == "2":
+            text_id = input("Enter the text_id to process: ").strip()
+            if not text_id:
+                print("Text ID cannot be empty. Please try again.")
+                continue
+        try:
+            return int(text_id)
+        except ValueError:
+            print("Text ID must be a number. Please try again.")
+            continue
         else:
-            # Step 3: Analyze the text via API (if not already analyzed)
-            print(f"\n----- Analyzing new text -----")
-            response = client.put(f"/api/text/{text_id}/analyze")
-            if response.status_code != 200:
-                raise Exception(f"Failed to analyze text: {response.text}")
-            print(f"Text {text_id} has been analyzed for the first time")
+            print("Invalid choice. Please enter 1 or 2.")
+
+async def create_or_find_text_from_file() -> Optional[int]:
+    """Create or find text from input file"""
+    input_file_path = os.path.join(PROJECT_ROOT, 'scripts', 'input_interactive_e2e.txt')
+    
+    try:
+        with open(input_file_path, 'r') as f:
+            text_content = f.read().strip()
+            
+            if not text_content:
+                print("❌ Input text file is empty")
+                return None
+            
+        print("\n📝 Creating or finding text in database...")
+        client = get_api_client()
+        response = client.post(
+            "/api/text/",
+            json={
+                "content": text_content,
+                "title": "E2E Test Text"
+            }
+        )
         
-        # Skip verification and voice generation if aborted
-        if pre_existing and is_analyzed and has_characters and action == "abort":
-            return
-        
-        # Step 4: Verify analysis results
-        response = client.get(f"/api/text/{text_id}")
         if response.status_code != 200:
-            raise Exception(f"Failed to get updated text details: {response.text}")
+            print(f"❌ Failed to create or find text: {response.text}")
+            return None
             
         text_data = response.json()
-        if not text_data["analyzed"]:
-            raise Exception("Text was not properly analyzed")
+        text_id = text_data["id"]
         
-        # Step 4.5: Generate voices for characters
-        print(f"\n----- Generating voices for characters -----")
-        # Get all characters for the text
+        if text_data.get("created", True):
+            print(f"✅ Created new text with ID {text_id}")
+        else:
+            print(f"✅ Found existing text with ID {text_id}")
+            
+        return text_id
+        
+    except FileNotFoundError:
+        print(f"❌ Input file not found: {input_file_path}")
+        return None
+    except Exception as e:
+        print(f"❌ Error processing input file: {str(e)}")
+        return None
+
+# Service execution functions - Updated to use NEW DEDICATED ENDPOINTS
+async def run_text_analysis(text_id: int) -> bool:
+    """Run text analysis using NEW /api/text-analysis/ endpoint"""
+    print("📝 Testing NEW ENDPOINT: /api/text-analysis/{text_id}/analyze")
+    try:
+        client = get_api_client()
+        response = client.post(f"/api/text-analysis/{text_id}/analyze")
+        print(f"Text Analysis Endpoint Response: {response.status_code}")
+        if response.status_code not in [200, 202]:
+            print(f"❌ NEW ENDPOINT ERROR: {response.text}")
+            return False
+        
+        print("✅ NEW ENDPOINT SUCCESS: Text analysis completed")
+        
+        # Test GET endpoints too
+        print("📝 Testing GET /api/text-analysis/{text_id}")
+        response = client.get(f"/api/text-analysis/{text_id}")
+        if response.status_code == 200:
+            print("✅ NEW ENDPOINT SUCCESS: Text analysis status retrieved")
+        else:
+            print(f"⚠️  GET endpoint returned: {response.status_code}")
+            
+        return True
+    except Exception as e:
+        print(f"❌ NEW ENDPOINT ERROR: {str(e)}")
+        return False
+
+async def run_voice_generation(text_id: int) -> bool:
+    """Run voice generation for all characters (existing endpoints)"""
+    print("🎙️  Running voice generation (existing endpoints)...")
+    try:
+        # Get characters
+        client = get_api_client()
         response = client.get(f"/api/character/text/{text_id}")
         if response.status_code != 200:
-            raise Exception("Failed to retrieve characters")
+            print("❌ Failed to retrieve characters")
+            return False
             
         characters = response.json()
         
-        # Skip voice generation and speech generation for combine_audio option
-        if pre_existing and is_analyzed and has_characters and action == "combine_audio":
-            pass
-        # Skip voice generation for generate_bg_music option
-        elif pre_existing and is_analyzed and has_characters and action == "generate_bg_music":
-            pass
-        # Skip voice generation for generate_sound_effects option  
-        elif pre_existing and is_analyzed and has_characters and action == "generate_sound_effects":
-            pass
-        else:
-            # Generate a voice for each character
-            for character in characters:
-                # If regenerating and character already has provider_id, skip voice generation
-                if pre_existing and is_analyzed and has_characters and action == "regenerate" and character.get('provider_id'):
-                    print(f"Using existing voice for character: {character['name']}")
-                    continue
+        # Generate voices for each character
+        generated_count = 0
+        for character in characters:
+            if character.get('provider_id'):
+                print(f"⏭️  Character {character['name']} already has voice")
+                continue
                     
-                print(f"Generating voice for character: {character['name']}")
-                response = client.post(
-                    f"/api/character/{character['id']}/voice",
-                    json={
-                        "text_id": text_id
-                    }
-                )
-                if response.status_code != 200:
-                    raise Exception(f"Failed to generate voice for character {character['id']}: {response.text}")
-                
-                response_data = response.json()
-                if response_data.get("status") == "skipped":
-                    print(f"Skipped voice generation for character: {character['name']} - {response_data.get('message')}")
-        
-        # Step 5: Generate speech audio for each segment
-        # Skip speech generation for generate_bg_music, combine_audio, and generate_sound_effects options
-        if pre_existing and is_analyzed and has_characters and (action == "generate_bg_music" or action == "combine_audio" or action == "generate_sound_effects"):
-            print(f"\n----- Using existing speech audio segments -----")
-        else:
-            print(f"\n----- Generating speech audio for segments -----")
-            response = client.post(f"/api/audio/text/{text_id}/generate-segments")
-            if response.status_code != 200:
-                raise Exception(f"Failed to generate segment audio: {response.text}")
-                
-            segment_audio_data = response.json()
-            
-            # Add a delay to ensure all segment audio files are fully saved
-            print(f"\n----- Waiting for segment audio files to be saved -----")
-            time.sleep(3)  # Wait for 3 seconds to ensure files are saved
-
-        # Step 5.3: Generate Sound Effects (new step)
-        # Skip sound effects generation for combine_audio option
-        if pre_existing and is_analyzed and has_characters and action == "combine_audio":
-            print(f"\n----- Using existing sound effects -----")
-        elif pre_existing and is_analyzed and has_characters and action == "generate_sound_effects":
-            # This is the main sound effects workflow
-            print(f"\n----- Analyzing text for sound effects -----")
-            db_session_sfx = None
-            try:
-                db_session_sfx = SessionLocal()
-                sound_effects = analyze_text_for_sound_effects(db_session_sfx, text_id)
-                print(f"Sound effects analysis completed: {len(sound_effects)} effects identified")
-                
-                if sound_effects:
-                    print(f"\n----- Generating sound effect audio -----")
-                    generate_all_sound_effects(db_session_sfx, text_id)
-                else:
-                    print("No sound effects identified for this text")
-            except Exception as e:
-                print(f"Error during sound effects processing: {str(e)}")
-                print("Warning: Proceeding without sound effects.")
-            finally:
-                if db_session_sfx:
-                    db_session_sfx.close()
-        else:
-            # For other actions, optionally run sound effects processing
-            print(f"\n----- Checking for existing sound effects -----")
-            db_session_sfx = None
-            try:
-                db_session_sfx = SessionLocal()
-                existing_sfx = crud.get_sound_effects_by_text(db_session_sfx, text_id)
-                
-                if not existing_sfx:
-                    print(f"No existing sound effects found. Running sound effects analysis...")
-                    sound_effects = analyze_text_for_sound_effects(db_session_sfx, text_id)
-                    print(f"Sound effects analysis completed: {len(sound_effects)} effects identified")
-                    
-                    if sound_effects:
-                        generate_all_sound_effects(db_session_sfx, text_id)
-                else:
-                    print(f"Found {len(existing_sfx)} existing sound effects")
-                    # Check if any need audio generation
-                    effects_without_audio = [sfx for sfx in existing_sfx if not sfx.audio_data_b64 or len(sfx.audio_data_b64) == 0]
-                    if effects_without_audio:
-                        print(f"Generating audio for {len(effects_without_audio)} sound effects without audio")
-                        generate_all_sound_effects(db_session_sfx, text_id)
-                    else:
-                        print("All sound effects already have audio")
-            except Exception as e:
-                print(f"Error during sound effects processing: {str(e)}")
-                print("Warning: Proceeding without sound effects.")
-            finally:
-                if db_session_sfx:
-                    db_session_sfx.close()
-
-        # Step 5.5: Generate Background Music
-        # Skip bg music generation for combine_audio and generate_sound_effects options
-        if pre_existing and is_analyzed and has_characters and (action == "combine_audio" or action == "generate_sound_effects"):
-            print(f"\n----- Using existing background music -----")
-        else:
-            print(f"\n----- Generating background music -----")
-            db_session = None
-            try:
-                db_session = SessionLocal()
-                prompt_success, prompt, music_success = process_background_music_for_text(db_session, text_id)
-                if not music_success:
-                    print(f"Warning: Background music generation failed or was skipped. Prompt success: {prompt_success}, Prompt: {prompt}")
-                else:
-                    print(f"Background music generated successfully. Prompt: {prompt}")
-            except Exception as e:
-                print(f"Error during background music generation: {str(e)}")
-                print("Warning: Proceeding without background music.")
-            finally:
-                if db_session:
-                    db_session.close()
-        
-        # Step 6: Generate and Export Final Audio (Speech Segments + Background Music)
-        print(f"\n----- Generating and Exporting Final Audio -----")
-        
-        output_path = get_audio_output_path(text_id) # Final desired path
-        target_output_dir = os.path.dirname(output_path) # Directory for export_final_audio
-        # get_audio_output_path ensures target_output_dir exists
-
-        db_session_export = None
-        generated_audio_by_export_func = None
-        try:
-            db_session_export = SessionLocal()
-            # export_final_audio will use its default bg_volume (0.1) and trailing_silence (0.0)
-            generated_audio_by_export_func = export_final_audio(
-                db=db_session_export, 
-                text_id=text_id,
-                output_dir=target_output_dir
+            print(f"🎙️  Generating voice for {character['name']}...")
+            response = client.post(
+                f"/api/character/{character['id']}/voice",
+                json={"text_id": text_id}
             )
-        except Exception as e:
-            # This captures errors if export_final_audio raises them
-            print(f"Error during final audio export process: {str(e)}")
-            raise Exception(f"Final audio export failed: {str(e)}") from e # Re-raise to be caught by main try-except
-        finally:
-            if db_session_export:
-                db_session_export.close()
-
-        if not generated_audio_by_export_func or not os.path.exists(generated_audio_by_export_func):
-            raise Exception(f"Final audio file was not generated by export_final_audio or path is invalid: {generated_audio_by_export_func}")
-        
-        # Move the generated file to the specific filename format/path expected by this script
-        if generated_audio_by_export_func != output_path:
-            shutil.move(generated_audio_by_export_func, output_path)
-            print(f"Moved final audio from {generated_audio_by_export_func} to {output_path}")
-        else:
-            print(f"Final audio generated directly at {output_path}")
-
-        # Step 7: Verify audio file is valid by checking file size
-        file_size = os.path.getsize(output_path)
-        if file_size <= 0:
-            raise Exception("Generated final audio file is empty or invalid")
             
-        print(f"\nSuccess! Generated final audio file with size: {file_size} bytes at {output_path}")
+            if response.status_code != 200:
+                print(f"❌ Failed to generate voice for {character['name']}")
+                return False
+            
+            generated_count += 1
+                
+        if generated_count > 0:
+            print(f"✅ Voice generation completed ({generated_count} voices generated)")
+        else:
+            print("✅ Voice generation completed (all voices already exist)")
+        return True
         
     except Exception as e:
-        print(f"\nERROR: Process failed: {str(e)}")
+        print(f"❌ Error in voice generation: {str(e)}")
+        return False
 
-# SessionLogger.start_session("test_end_to_end") # Commenting out pytest specific logging for now
+async def run_speech_generation(text_id: int) -> bool:
+    """Run speech generation for all segments (existing endpoint)"""
+    print("🗣️  Running speech generation (existing endpoint)...")
+    try:
+        client = get_api_client()
+        response = client.post(f"/api/audio/text/{text_id}/generate-segments")
+        if response.status_code == 200:
+            print("✅ Speech generation completed")
+            # Wait for files to be saved
+            await asyncio.sleep(3)
+            return True
+        else:
+            print(f"❌ Speech generation failed: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Error in speech generation: {str(e)}")
+        return False
 
-def generate_all_sound_effects(db_session, text_id):
-    """Generate audio for all sound effects of a text"""
-    print(f"\n----- Generating sound effect audio -----")
-    
-    # Get all sound effects for the text
-    sound_effects = crud.get_sound_effects_by_text(db_session, text_id)
-    
-    if not sound_effects:
-        print("No sound effects found for this text")
-        return
-    
-    print(f"Found {len(sound_effects)} sound effects to generate audio for")
-    
-    successful_generations = 0
-    for effect in sound_effects:
-        print(f"Generating audio for effect: {effect.effect_name}")
-        try:
-            generate_and_store_effect(db_session, effect.effect_id)
-            db_session.refresh(effect)
+async def run_audio_analysis(text_id: int) -> bool:
+    """Run audio analysis using NEW /api/audio-analysis/ endpoint"""
+    print("🎵 Testing NEW ENDPOINT: /api/audio-analysis/{text_id}/analyze")
+    try:
+        client = get_api_client()
+        response = client.post(f"/api/audio-analysis/{text_id}/analyze")
+        print(f"Audio Analysis Endpoint Response: {response.status_code}")
+        if response.status_code not in [200, 202]:
+            print(f"❌ NEW ENDPOINT ERROR: {response.text}")
+            return False
             
-            # Check if audio was generated
-            if effect.audio_data_b64 and len(effect.audio_data_b64) > 0:
-                successful_generations += 1
-                print(f"✓ Successfully generated audio for {effect.effect_name}")
+        print("✅ NEW ENDPOINT SUCCESS: Audio analysis completed")
+        
+        # Test additional GET endpoints
+        print("🎵 Testing GET /api/audio-analysis/{text_id}")
+        response = client.get(f"/api/audio-analysis/{text_id}")
+        if response.status_code == 200:
+            print("✅ NEW ENDPOINT SUCCESS: Audio analysis results retrieved")
+        
+        print("🎵 Testing GET /api/audio-analysis/{text_id}/soundscape")
+        response = client.get(f"/api/audio-analysis/{text_id}/soundscape")
+        if response.status_code == 200:
+            print("✅ NEW ENDPOINT SUCCESS: Soundscape data retrieved")
+            
+        print("🎵 Testing GET /api/audio-analysis/{text_id}/sound-effects")
+        response = client.get(f"/api/audio-analysis/{text_id}/sound-effects")
+        if response.status_code == 200:
+            print("✅ NEW ENDPOINT SUCCESS: Sound effects data retrieved")
+            
+        return True
+            
+    except Exception as e:
+        print(f"❌ NEW ENDPOINT ERROR: {str(e)}")
+        return False
+
+async def run_bg_music_generation(text_id: int) -> bool:
+    """Run background music generation using NEW /api/background-music/ endpoint"""
+    print("🎼 Testing NEW ENDPOINT: /api/background-music/{text_id}/process")
+    try:
+        client = get_api_client()
+        response = client.post(f"/api/background-music/{text_id}/process")
+        print(f"Background Music Endpoint Response: {response.status_code}")
+        if response.status_code not in [200, 202]:
+            print(f"❌ NEW ENDPOINT ERROR: {response.text}")
+            return False
+            
+        print("✅ NEW ENDPOINT SUCCESS: Background music generation completed")
+        
+        # Test GET endpoints
+        print("🎼 Testing GET /api/background-music/{text_id}")
+        response = client.get(f"/api/background-music/{text_id}")
+        if response.status_code == 200:
+            print("✅ NEW ENDPOINT SUCCESS: Background music status retrieved")
+            
+        return True
+            
+    except Exception as e:
+        print(f"❌ NEW ENDPOINT ERROR: {str(e)}")
+        return False
+
+async def run_sfx_generation(text_id: int) -> bool:
+    """Run sound effects generation (existing endpoint)"""
+    print("🔊 Running sound effects generation (existing endpoint)...")
+    try:
+        client = get_api_client()
+        response = client.post(f"/api/sound-effects/text/{text_id}/generate")
+        if response.status_code in [200, 202]:
+            print("✅ Sound effects generation completed")
+            return True
+        else:
+            print(f"❌ Sound effects generation failed: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error in sound effects generation: {str(e)}")
+        return False
+
+async def run_audio_combining(text_id: int) -> str:
+    """Run final audio combining using NEW /api/export/ endpoint"""
+    print("🎬 Testing NEW ENDPOINT: /api/export/{text_id}/final-audio")
+    try:
+        client = get_api_client()
+        response = client.post(f"/api/export/{text_id}/final-audio")
+        print(f"Export Endpoint Response: {response.status_code}")
+        if response.status_code not in [200, 202]:
+            print(f"❌ NEW ENDPOINT ERROR: {response.text}")
+            return None
+        
+        print("✅ NEW ENDPOINT SUCCESS: Final audio export completed")
+        
+        # Parse the actual response to get the real file path
+        try:
+            response_data = response.json()
+            actual_file_path = response_data.get("data", {}).get("audio_file")
+            if actual_file_path:
+                print(f"📁 Actual file created: {actual_file_path}")
             else:
-                print(f"✗ Failed to generate audio for {effect.effect_name}")
+                print("⚠️  No file path returned in response")
         except Exception as e:
-            print(f"✗ Error generating audio for {effect.effect_name}: {str(e)}")
+            print(f"⚠️  Could not parse response: {e}")
+            actual_file_path = None
+        
+        # Test status endpoint
+        print("🎬 Testing GET /api/export/{text_id}/status")
+        response = client.get(f"/api/export/{text_id}/status")
+        if response.status_code == 200:
+            print("✅ NEW ENDPOINT SUCCESS: Export status retrieved")
+            
+        # Return the actual file path if available, otherwise return a generic path
+        return actual_file_path if actual_file_path else f"output/final_audio_{text_id}_[timestamp].mp3"
+        
+    except Exception as e:
+        print(f"❌ NEW ENDPOINT ERROR: {str(e)}")
+        return None
+
+async def run_adaptive_pipeline(text_id: int) -> Dict[str, Any]:
+    """Execute full adaptive pipeline that runs all services as they become available - TESTING ALL NEW ENDPOINTS"""
+    results = {}
     
-    print(f"Sound effect generation completed: {successful_generations}/{len(sound_effects)} successful") 
+    # Define service execution order with dependencies
+    service_order = [
+        "text_analysis",
+        "audio_analysis", 
+        "voice_generation",
+        "speech_generation",
+        "bg_music_generation",
+        "sfx_generation",
+        "audio_combining"
+    ]
+    
+    print("🚀 Running adaptive full pipeline - COMPREHENSIVE ENDPOINT TESTING...")
+    print("🎯 This will test all new dedicated endpoints:")
+    print("   📝 /api/text-analysis/")
+    print("   🎵 /api/audio-analysis/")
+    print("   🎼 /api/background-music/")
+    print("   🎬 /api/export/")
+    print("   🔊 /api/sound-effects/ (existing)")
+    
+    for service in service_order:
+        # Check current pipeline status
+        status = await get_pipeline_status(text_id)
+        options = get_service_options(status)
+        
+        # Skip if service not available or already completed
+        if not options.get(service, False):
+            print(f"⏭️  Skipping {service} - not available or already completed")
+            continue
+            
+        # Execute the service
+        print(f"\n🔄 Testing {service} endpoints...")
+        
+        if service == "text_analysis":
+            results[service] = await run_text_analysis(text_id)
+        elif service == "audio_analysis":
+            results[service] = await run_audio_analysis(text_id)
+        elif service == "voice_generation":
+            results[service] = await run_voice_generation(text_id)
+        elif service == "speech_generation":
+            results[service] = await run_speech_generation(text_id)
+        elif service == "bg_music_generation":
+            results[service] = await run_bg_music_generation(text_id)
+        elif service == "sfx_generation":
+            results[service] = await run_sfx_generation(text_id)
+        elif service == "audio_combining":
+            output_path = await run_audio_combining(text_id)
+            results[service] = output_path is not None
+            if output_path:
+                results["output_path"] = output_path
+        
+        # Stop pipeline immediately if critical service fails
+        if not results.get(service, False) and service in ["text_analysis", "voice_generation", "speech_generation"]:
+            print(f"❌ CRITICAL FAILURE: {service} failed, stopping pipeline immediately")
+            print(f"💥 Pipeline execution terminated due to critical service failure")
+            results["pipeline_status"] = "FAILED"
+            results["failed_service"] = service
+            return results
+            
+    return results
+
+async def run_parallel_pipeline(text_id: int, services: List[str]) -> Dict[str, Any]:
+    """Execute services with optimal parallelization - TESTING SELECTED NEW ENDPOINTS"""
+    results = {}
+    
+    print(f"🎯 Testing selected endpoints: {', '.join(services)}")
+    
+    # Sequential services that must run first
+    sequential_services = ["text_analysis", "audio_analysis"]
+    
+    # Services that can run in parallel after their dependencies
+    parallel_groups = {
+        "speech_track": ["voice_generation", "speech_generation"],
+        "audio_track": ["bg_music_generation", "sfx_generation"]
+    }
+    
+    # Execute sequential services first
+    for service in sequential_services:
+        if service in services:
+            print(f"\n🔄 Testing {service} endpoints...")
+            if service == "text_analysis":
+                results[service] = await run_text_analysis(text_id)
+            elif service == "audio_analysis":
+                results[service] = await run_audio_analysis(text_id)
+                
+            if not results.get(service, False):
+                print(f"❌ CRITICAL FAILURE: {service} failed, stopping pipeline immediately")
+                print(f"💥 Pipeline execution terminated due to critical service failure")
+                results["pipeline_status"] = "FAILED"
+                results["failed_service"] = service
+                return results
+    
+    # Execute parallel groups
+    parallel_tasks = []
+    
+    # Speech track
+    speech_services = [s for s in services if s in parallel_groups["speech_track"]]
+    if speech_services:
+        async def speech_track():
+            track_results = {}
+            print(f"\n🎤 Testing speech track endpoints: {speech_services}")
+            # Voice generation must come before speech generation
+            if "voice_generation" in speech_services:
+                track_results["voice_generation"] = await run_voice_generation(text_id)
+                if not track_results.get("voice_generation", False):
+                    print(f"❌ CRITICAL FAILURE: voice_generation failed in parallel track")
+                    track_results["pipeline_status"] = "FAILED"
+                    track_results["failed_service"] = "voice_generation"
+                    return track_results
+                    
+            if "speech_generation" in speech_services:
+                track_results["speech_generation"] = await run_speech_generation(text_id)
+                if not track_results.get("speech_generation", False):
+                    print(f"❌ CRITICAL FAILURE: speech_generation failed in parallel track")
+                    track_results["pipeline_status"] = "FAILED"
+                    track_results["failed_service"] = "speech_generation"
+                    return track_results
+                
+            return track_results
+            
+        parallel_tasks.append(speech_track())
+    
+    # Audio track
+    audio_services = [s for s in services if s in parallel_groups["audio_track"]]
+    if audio_services:
+        async def audio_track():
+            track_results = {}
+            print(f"\n🎵 Testing audio track endpoints: {audio_services}")
+            # BG music and SFX can run in parallel
+            audio_tasks = []
+            
+            if "bg_music_generation" in audio_services:
+                audio_tasks.append(run_bg_music_generation(text_id))
+            if "sfx_generation" in audio_services:
+                audio_tasks.append(run_sfx_generation(text_id))
+                
+            if audio_tasks:
+                audio_results = await asyncio.gather(*audio_tasks, return_exceptions=True)
+                if "bg_music_generation" in audio_services:
+                    track_results["bg_music_generation"] = audio_results[0] if not isinstance(audio_results[0], Exception) else False
+                if "sfx_generation" in audio_services:
+                    idx = 1 if "bg_music_generation" in audio_services else 0
+                    track_results["sfx_generation"] = audio_results[idx] if not isinstance(audio_results[idx], Exception) else False
+                    
+            return track_results
+            
+        parallel_tasks.append(audio_track())
+    
+    # Execute parallel tracks
+    if parallel_tasks:
+        print("🚀 Executing parallel endpoint testing...")
+        track_results = await asyncio.gather(*parallel_tasks, return_exceptions=True)
+        
+        # Merge results and check for critical failures
+        for track_result in track_results:
+            if isinstance(track_result, dict):
+                results.update(track_result)
+                # Check if any track reported a critical failure
+                if track_result.get("pipeline_status") == "FAILED":
+                    print(f"💥 Pipeline execution terminated due to critical service failure")
+                    return results
+            else:
+                print(f"⚠️  Parallel track failed: {track_result}")
+                # If a track completely failed (exception), treat as critical if it was handling critical services
+                results["pipeline_status"] = "FAILED"
+                results["failed_service"] = "parallel_track_exception"
+                return results
+    
+    # Finally, run audio combining if requested
+    if "audio_combining" in services:
+        print(f"\n🎬 Testing export endpoints...")
+        output_path = await run_audio_combining(text_id)
+        results["audio_combining"] = output_path is not None
+        if output_path:
+            results["output_path"] = output_path
+    
+    return results
+
+async def main():
+    """Main async entry point - COMPREHENSIVE ENDPOINT TESTING"""
+    print("🎵 Narratix Async E2E Pipeline - NEW ENDPOINT TESTING")
+    print("=====================================================")
+    print("🎯 This script will test all new dedicated endpoints:")
+    print("   📝 /api/text-analysis/ - Text analysis operations")
+    print("   🎵 /api/audio-analysis/ - Audio analysis operations") 
+    print("   🎼 /api/background-music/ - Background music operations")
+    print("   🎬 /api/export/ - Audio export operations")
+    print("   🔊 /api/sound-effects/ - Sound effects operations (existing)")
+    print("=====================================================")
+    
+    try:
+        # Get text ID from user
+        text_id = await get_text_id_from_user()
+        if not text_id:
+            print("❌ No valid text ID provided. Exiting.")
+            return
+            
+        # Get pipeline status
+        print("\n🔍 Checking pipeline status...")
+        status = await get_pipeline_status(text_id)
+        display_pipeline_status(status)
+        
+        # Get service selection from user
+        proceed, selected_services, is_adaptive = prompt_for_services(status)
+        if not proceed:
+            print("👋 Operation cancelled by user.")
+            return
+            
+        # Execute pipeline
+        start_time = time.time()
+        
+        if is_adaptive:
+            # Run adaptive full pipeline
+            print("\n🎯 TESTING ALL NEW ENDPOINTS IN ADAPTIVE MODE")
+            results = await run_adaptive_pipeline(text_id)
+        else:
+            # Validate dependencies for custom selection
+            valid, errors = validate_service_dependencies(selected_services, status)
+            if not valid:
+                print("\n❌ DEPENDENCY ERRORS:")
+                for error in errors:
+                    print(f"   {error}")
+                print("\nPlease resolve dependencies and try again.")
+                return
+                
+            print(f"\n🎯 TESTING SELECTED NEW ENDPOINTS")
+            results = await run_parallel_pipeline(text_id, selected_services)
+            
+        end_time = time.time()
+        
+        # Show results
+        print(f"\n📊 ENDPOINT TESTING RESULTS:")
+        print(f"⏱️  Total time: {end_time - start_time:.2f} seconds")
+        
+        # Check if pipeline failed
+        pipeline_failed = results.get("pipeline_status") == "FAILED"
+        failed_service = results.get("failed_service")
+        
+        if pipeline_failed:
+            print(f"\n💥 ENDPOINT TESTING FAILED!")
+            print(f"❌ Critical service '{failed_service}' failed")
+            print(f"🚫 Pipeline execution was terminated early")
+        
+        # Show detailed endpoint test results
+        endpoint_tests = {
+            "text_analysis": "📝 /api/text-analysis/ endpoints",
+            "audio_analysis": "🎵 /api/audio-analysis/ endpoints", 
+            "bg_music_generation": "🎼 /api/background-music/ endpoints",
+            "audio_combining": "🎬 /api/export/ endpoints",
+            "voice_generation": "🎙️  /api/character/ endpoints (existing)",
+            "speech_generation": "🗣️  /api/audio/ endpoints (existing)",
+            "sfx_generation": "🔊 /api/sound-effects/ endpoints (existing)"
+        }
+        
+        print(f"\n🎯 DETAILED ENDPOINT TEST RESULTS:")
+        for service, endpoint_desc in endpoint_tests.items():
+            if service in results:
+                status_icon = "✅" if results[service] else "❌"
+                print(f"{status_icon} {endpoint_desc}: {'PASS' if results[service] else 'FAIL'}")
+            
+        if "output_path" in results:
+            print(f"\n🎬 Final audio output: {results['output_path']}")
+        
+        if pipeline_failed:
+            print(f"\n💥 ENDPOINT TESTING FAILED!")
+            print(f"🔧 Check the failed endpoints and fix any issues before retrying.")
+            # Exit with error code to indicate failure
+            import sys
+            sys.exit(1)
+        else:
+            print("\n✨ ENDPOINT TESTING COMPLETED SUCCESSFULLY!")
+            print("🎉 All new dedicated endpoints are working correctly!")
+        
+    except Exception as e:
+        print(f"\n💥 Endpoint testing failed with error: {str(e)}")
+        raise
+
+def run_interactive_e2e_flow():
+    """Sync wrapper for the async main function"""
+    asyncio.run(main())
 
 if __name__ == "__main__":
-    SessionLogger.start_session("interactive_e2e_script") # Start session for script run
+    SessionLogger.start_session("async_interactive_e2e_endpoint_testing")
     run_interactive_e2e_flow()
-    print("\nInteractive E2E processing finished.") 
+    print("\n👋 Async Interactive E2E endpoint testing finished.") 

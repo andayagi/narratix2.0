@@ -16,12 +16,29 @@ if DATABASE_URL.startswith("sqlite:///") and not DATABASE_URL.startswith("sqlite
     db_path = os.path.join(project_root, DATABASE_URL[len("sqlite:///"):])
     DATABASE_URL = f"sqlite:///{db_path}"
 
-engine = create_engine(DATABASE_URL)
-# For SQLite, add connect_args to disable same-thread check if needed for FastAPI background tasks
+# Enhanced database configuration for parallel processing
 if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    # For SQLite, add connect_args to disable same-thread check and enable WAL mode for better concurrency
+    engine = create_engine(
+        DATABASE_URL, 
+        connect_args={
+            "check_same_thread": False,
+            "timeout": 20  # 20 second timeout for SQLite connections
+        },
+        pool_size=25,           # Increased for parallel operations
+        max_overflow=35,        # Higher burst capacity  
+        pool_pre_ping=True,     # Verify connection health
+        pool_recycle=3600       # Refresh connections hourly
+    )
 else:
-    engine = create_engine(DATABASE_URL)
+    # For PostgreSQL/MySQL with full parallel processing support
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=25,           # Increased for parallel operations
+        max_overflow=35,        # Higher burst capacity
+        pool_pre_ping=True,     # Verify connection health
+        pool_recycle=3600       # Refresh connections hourly
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

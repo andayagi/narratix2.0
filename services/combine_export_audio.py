@@ -2,7 +2,7 @@ import os
 import subprocess
 import base64
 import tempfile
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from datetime import datetime
 
@@ -10,13 +10,153 @@ from utils.logging import get_logger
 from utils.timing import time_it
 from db import crud
 
+# Import force alignment dependencies
+try:
+    from faster_whisper import WhisperModel
+except ImportError:
+    WhisperModel = None
+
+from utils.config import settings
+
 # Initialize logger
 logger = get_logger(__name__)
+
+class ForceAlignmentService:
+    """Service for generating word-level timestamps using faster-whisper"""
+    
+    def __init__(self):
+        self.model = None
+        self.model_size = getattr(settings, 'WHISPERX_MODEL_SIZE', 'base')
+        self.compute_type = getattr(settings, 'WHISPERX_COMPUTE_TYPE', 'float32')
+        
+    def _load_model(self):
+        """Load WhisperModel if not already loaded"""
+        if self.model is None and WhisperModel is not None:
+            try:
+                logger.info(f"Loading Whisper model: {self.model_size}")
+                self.model = WhisperModel(
+                    self.model_size, 
+                    device="auto",
+                    compute_type=self.compute_type
+                )
+                logger.info("Whisper model loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load Whisper model: {str(e)}")
+                self.model = None
+        
+    def get_word_timestamps(self, audio_file_path: str, text_content: str) -> List[Dict]:
+        """
+        Get word-level timestamps from audio file
+        
+        Args:
+            audio_file_path: Path to the audio file
+            text_content: The text content for reference
+            
+        Returns:
+            List of dictionaries with word, start, and end times
+            Format: [{"word": "hello", "start": 0.0, "end": 0.5}, ...]
+        """
+        if WhisperModel is None:
+            logger.warning("faster-whisper not available, returning empty timestamps")
+            return []
+            
+        self._load_model()
+        if self.model is None:
+            logger.error("Whisper model not available")
+            return []
+            
+        try:
+            logger.info(f"Running force alignment on audio file: {audio_file_path}")
+            
+            # Transcribe with word timestamps
+            segments, _ = self.model.transcribe(
+                audio_file_path,
+                word_timestamps=True,
+                language="en"  # Assuming English for now
+            )
+            
+            word_timestamps = []
+            for segment in segments:
+                if hasattr(segment, 'words') and segment.words:
+                    for word_info in segment.words:
+                        word_timestamps.append({
+                            "word": word_info.word.strip(),
+                            "start": word_info.start,
+                            "end": word_info.end
+                        })
+            
+            logger.info(f"Generated {len(word_timestamps)} word timestamps")
+            return word_timestamps
+            
+        except Exception as e:
+            logger.error(f"Error during force alignment: {str(e)}")
+            return []
+
+# Global instance
+force_alignment_service = ForceAlignmentService()
+
+def _run_force_alignment_on_combined_audio(combined_audio_path: str, text_content: str, db: Session, text_id: int) -> bool:
+    """
+    Run force alignment on the combined audio and store results in database.
+    
+    Args:
+        combined_audio_path: Path to the combined audio file
+        text_content: Complete text content
+        db: Database session
+        text_id: ID of the text
+        
+    Returns:
+        True if alignment was successful, False otherwise
+    """
+    try:
+        logger.info(f"Running force alignment for text ID {text_id}")
+        
+        # Get word timestamps
+        word_timestamps = force_alignment_service.get_word_timestamps(combined_audio_path, text_content)
+        
+        if word_timestamps:
+            # Store with current timestamp
+            crud.update_text_word_timestamps(db, text_id, word_timestamps)
+            logger.info(f"Successfully completed force alignment for text ID {text_id}, got {len(word_timestamps)} word timestamps")
+            return True
+        else:
+            logger.warning(f"No word timestamps generated for text ID {text_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error running force alignment for text ID {text_id}: {str(e)}")
+        return False
+
+def _match_word_position_to_timestamp(word_position: int, word_timestamps: List[Dict]) -> Optional[float]:
+    """
+    Match a word position (index in text) to its timestamp from force alignment.
+    
+    Args:
+        word_position: Word position in the text (0-based index)
+        word_timestamps: List of word timestamps from force alignment
+        
+    Returns:
+        Start timestamp of the word, or None if not found
+    """
+    if not word_timestamps or word_position < 0:
+        return None
+        
+    # Ensure word_position is within bounds
+    if word_position < len(word_timestamps):
+        return word_timestamps[word_position]["start"]
+    
+    # If word_position is beyond our timestamps, return the last word's timestamp
+    if word_timestamps:
+        logger.warning(f"Word position {word_position} beyond available timestamps ({len(word_timestamps)}), using last word timestamp")
+        return word_timestamps[-1]["start"]
+    
+    return None
 
 @time_it("combine_speech_segments")
 def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, trailing_silence: float = 0.0) -> Optional[str]:
     """
     Combine all speech segments for a given text into a single audio file.
+    This function now includes force alignment before combining.
     
     Args:
         db: Database session
@@ -28,6 +168,12 @@ def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, t
         Path to the combined audio file, or None if error
     """
     try:
+        # Get text content for force alignment
+        db_text = crud.get_text(db, text_id)
+        if not db_text:
+            logger.error(f"Text with ID {text_id} not found")
+            return None
+        
         # Get all segments for the text, ordered by sequence
         segments = crud.get_segments_by_text(db, text_id)
         if not segments:
@@ -161,6 +307,15 @@ def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, t
         if result.returncode != 0:
             logger.error(f"Error combining speech segments: {result.stderr}")
             return None
+        
+        # NEW: Run force alignment on the combined audio
+        logger.info(f"Running force alignment on combined audio for text ID {text_id}")
+        force_alignment_success = _run_force_alignment_on_combined_audio(
+            combined_audio_path, db_text.content, db, text_id
+        )
+        
+        if not force_alignment_success:
+            logger.warning(f"Force alignment failed for text ID {text_id}, but continuing with combined audio")
             
         logger.info(f"Successfully combined {len(segments_with_audio)} speech segments into {combined_audio_path}")
         return combined_audio_path
@@ -232,16 +387,38 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
             # Fall back to unnormalized speech
             temp_norm_speech = combined_speech_path
         
-        # Step 3: Process sound effects
+        # Step 3: Process sound effects using word position matching
         logger.info(f"Processing sound effects for text ID {text_id}")
         sound_effects = crud.get_sound_effects_by_text(db, text_id)
         sound_effects_with_audio = []
         
+        # Get word timestamps from force alignment for sound effect positioning
+        db_text = crud.get_text(db, text_id)
+        word_timestamps = db_text.word_timestamps if db_text else None
+        
         for effect in sound_effects:
-            # Skip effects without audio data or timing
-            if not effect.audio_data_b64 or effect.start_time is None:
-                logger.warning(f"Sound effect {effect.effect_id} ({effect.effect_name}) missing audio data or timing, skipping")
+            # Skip effects without audio data
+            if not effect.audio_data_b64:
+                logger.warning(f"Sound effect {effect.effect_id} ({effect.effect_name}) missing audio data, skipping")
                 continue
+            
+            # Check if word timestamps are available
+            if not word_timestamps:
+                logger.error(f"No word timestamps available for text ID {text_id}, cannot position sound effects")
+                return None
+            
+            # Check if word position is available
+            if effect.start_word_position is None:
+                logger.error(f"Sound effect {effect.effect_id} ({effect.effect_name}) missing word position, cannot position sound effect")
+                return None
+            
+            # Determine start time using word position matching
+            start_time = _match_word_position_to_timestamp(effect.start_word_position, word_timestamps)
+            if start_time is None:
+                logger.error(f"Could not match word position {effect.start_word_position} for sound effect '{effect.effect_name}' to timestamp")
+                return None
+                
+            logger.info(f"Matched sound effect '{effect.effect_name}' word position {effect.start_word_position} to timestamp {start_time}s")
                 
             try:
                 # Decode base64 to binary
@@ -257,10 +434,10 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
                     
                 sound_effects_with_audio.append({
                     "file": temp_fx_file,
-                    "start_time": effect.start_time,
+                    "start_time": start_time,
                     "effect_name": effect.effect_name
                 })
-                logger.info(f"Prepared sound effect '{effect.effect_name}' at {effect.start_time}s")
+                logger.info(f"Prepared sound effect '{effect.effect_name}' at {start_time}s")
                 
             except Exception as e:
                 logger.error(f"Error processing sound effect {effect.effect_id}: {str(e)}")
@@ -345,10 +522,12 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
             if sound_effects_with_audio:
                 for i, fx in enumerate(sound_effects_with_audio):
                     fx_label = f"fx{i}"
-                    delay_ms = int(fx["start_time"] * 1000)
+                    # Add speech delay offset to sound effect timing to keep them synchronized
+                    fx_total_delay_s = fx["start_time"] + speech_start_delay_s
+                    delay_ms = int(fx_total_delay_s * 1000)
                     filter_parts.append(f"amovie='{fx['file']}',volume={fx_volume},adelay={delay_ms}|{delay_ms}[{fx_label}]")
                     mix_inputs.append(f"[{fx_label}]")
-                    logger.info(f"Added sound effect '{fx['effect_name']}' at {fx['start_time']}s with volume {fx_volume}")
+                    logger.info(f"Added sound effect '{fx['effect_name']}' at {fx_total_delay_s}s (original: {fx['start_time']}s + {speech_start_delay_s}s speech delay) with volume {fx_volume}")
             
             # Final mix
             num_inputs = len(mix_inputs)

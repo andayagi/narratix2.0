@@ -145,9 +145,30 @@ def test_full_text_to_audio_processing():
                 print(result)
             
             # Re-analyze the text
-            response = client.put(f"/api/text/{text_id}/analyze", params={"force": True})
-            assert response.status_code == 200, f"Failed to re-analyze text: {response.text}"
-            print(f"Text {text_id} has been re-analyzed")
+            response = client.post(f"/api/text-analysis/{text_id}/analyze")
+            assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}: {response.text}"
+
+            # Wait a moment for background processing if it returns 202
+            if response.status_code == 202:
+                time.sleep(2)
+            
+            # Verify analysis was performed
+            response = client.get(f"/api/text/{text_id}")
+            text_data = response.json()
+            
+            # The analyzed field might not be immediately updated for background tasks
+            # But we can check if characters and segments were created
+            response = client.get(f"/api/character/")
+            characters = response.json()
+            assert len(characters) > 0, "Should have characters after analysis"
+            
+            # Test duplicate analysis (should not re-analyze unless force=True)
+            response = client.post(f"/api/text-analysis/{text_id}/analyze")
+            assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}"
+            
+            # Test duplicate analysis again
+            response = client.post(f"/api/text-analysis/{text_id}/analyze")
+            assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}"
         else:
             # Create new text record instead
             print(f"\n----- Creating new text record -----")
@@ -165,15 +186,57 @@ def test_full_text_to_audio_processing():
             print(f"Created new text with ID {text_id}")
             
             # Analyze the new text
-            response = client.put(f"/api/text/{text_id}/analyze")
-            assert response.status_code == 200, f"Failed to analyze text: {response.text}"
-            print(f"Text {text_id} has been analyzed")
+            response = client.post(f"/api/text-analysis/{text_id}/analyze")
+            assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}: {response.text}"
+
+            # Wait a moment for background processing if it returns 202
+            if response.status_code == 202:
+                time.sleep(2)
+            
+            # Verify analysis was performed
+            response = client.get(f"/api/text/{text_id}")
+            text_data = response.json()
+            
+            # The analyzed field might not be immediately updated for background tasks
+            # But we can check if characters and segments were created
+            response = client.get(f"/api/character/")
+            characters = response.json()
+            assert len(characters) > 0, "Should have characters after analysis"
+            
+            # Test duplicate analysis (should not re-analyze unless force=True)
+            response = client.post(f"/api/text-analysis/{text_id}/analyze")
+            assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}"
+            
+            # Test duplicate analysis again
+            response = client.post(f"/api/text-analysis/{text_id}/analyze")
+            assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}"
     else:
         # Step 3: Analyze the text via API (if not already analyzed)
         print(f"\n----- Analyzing new text -----")
-        response = client.put(f"/api/text/{text_id}/analyze")
-        assert response.status_code == 200, f"Failed to analyze text: {response.text}"
-        print(f"Text {text_id} has been analyzed for the first time")
+        response = client.post(f"/api/text-analysis/{text_id}/analyze")
+        assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}: {response.text}"
+
+        # Wait a moment for background processing if it returns 202
+        if response.status_code == 202:
+            time.sleep(2)
+        
+        # Verify analysis was performed
+        response = client.get(f"/api/text/{text_id}")
+        text_data = response.json()
+        
+        # The analyzed field might not be immediately updated for background tasks
+        # But we can check if characters and segments were created
+        response = client.get(f"/api/character/")
+        characters = response.json()
+        assert len(characters) > 0, "Should have characters after analysis"
+        
+        # Test duplicate analysis (should not re-analyze unless force=True)
+        response = client.post(f"/api/text-analysis/{text_id}/analyze")
+        assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}"
+        
+        # Test duplicate analysis again
+        response = client.post(f"/api/text-analysis/{text_id}/analyze")
+        assert response.status_code in [200, 202], f"Expected 200 or 202, got {response.status_code}"
     
     # Step 4: Verify analysis results
     response = client.get(f"/api/text/{text_id}")

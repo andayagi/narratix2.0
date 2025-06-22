@@ -91,6 +91,9 @@ async def create_character_voice(
     if not text_id:
         raise HTTPException(status_code=400, detail="text_id is required")
     
+    # Check for force regenerate flag
+    force_regenerate = data.get("force_regenerate", False)
+    
     # Generate voice
     try:
         voice_id = await generate_character_voice(
@@ -99,7 +102,8 @@ async def create_character_voice(
             character_name=character.name,
             character_description=character.description or "",
             character_intro_text=character.intro_text or "",
-            text_id=text_id
+            text_id=text_id,
+            force_regenerate=force_regenerate
         )
         
         if voice_id is None:

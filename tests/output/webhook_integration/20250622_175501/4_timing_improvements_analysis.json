@@ -1,0 +1,49 @@
+{
+  "test": "webhook_timing_vs_polling_simulation",
+  "webhook_times": {
+    "sound_effect_trigger": 0.1050419807434082,
+    "sound_effect_processing": 0.20504498481750488,
+    "sound_effect_total": 0.3100869655609131,
+    "background_music_trigger": 0.10363483428955078,
+    "background_music_processing": 0.3037288188934326,
+    "background_music_total": 0.4073636531829834
+  },
+  "polling_times": {
+    "sound_effect_total": 180,
+    "background_music_total": 300,
+    "sound_effect_trigger": 180,
+    "background_music_trigger": 300,
+    "sound_effect_processing": 0,
+    "background_music_processing": 0
+  },
+  "individual_improvements": {
+    "sound_effect_total": {
+      "old_time": 180,
+      "new_time": 0.3100869655609131,
+      "improvement_ratio": 580.4823162250625,
+      "time_saved": 179.6899130344391,
+      "percent_faster": 99.82772946357727
+    },
+    "background_music_total": {
+      "old_time": 300,
+      "new_time": 0.4073636531829834,
+      "improvement_ratio": 736.4427279064173,
+      "time_saved": 299.592636346817,
+      "percent_faster": 99.86421211560568
+    }
+  },
+  "parallel_improvement": {
+    "sequential_old": 480,
+    "parallel_new": 0.4073636531829834,
+    "improvement_ratio": 1178.3083646502678,
+    "time_saved": 479.592636346817,
+    "percent_faster": 99.91513257225354
+  },
+  "summary": {
+    "sound_effects_improvement": "580.5x faster",
+    "background_music_improvement": "736.4x faster",
+    "parallel_processing_improvement": "1178.3x faster",
+    "overall_user_experience": "API responses now return in seconds instead of minutes"
+  },
+  "timestamp": "2025-06-22T17:55:01.797846"
+}

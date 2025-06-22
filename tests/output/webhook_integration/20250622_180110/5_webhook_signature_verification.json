@@ -1,0 +1,12 @@
+{
+  "test": "webhook_signature_verification",
+  "status": "not_implemented",
+  "note": "Webhook signature verification is planned for future security enhancement",
+  "todo": [
+    "Implement Replicate webhook signature verification",
+    "Add timestamp validation to prevent replay attacks",
+    "Use constant-time comparison for signatures",
+    "Add rate limiting for webhook endpoint"
+  ],
+  "timestamp": "2025-06-22T18:01:10.073815"
+}

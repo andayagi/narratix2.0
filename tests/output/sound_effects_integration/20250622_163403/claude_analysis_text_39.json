@@ -1,0 +1,41 @@
+{
+  "description": "Sound effects analysis results using real Claude API",
+  "text_id": 39,
+  "text_content": "The caf\u00e9 was almost empty when she sat across from me. Rain tapping at the windows, jazz humming low from the speakers. She didn\u2019t take off her coat.\n\u201cYou said it was urgent,\u201d I said.\nShe slid a tiny brass key across the table. \u201cIt\u2019s from his apartment.\u201d\nI didn\u2019t touch it. \u201cYou\u2019re not supposed to have that.\u201d\nShe smiled like it hurt. \u201cNeither are you, Detective.\u201d\n\u201cI\u2019m not a detective anymore.\u201d\n\u201cYou are tonight.\u201d\nI stared at the key. \u201cHe\u2019s been dead three years.\u201d\n\u201cAnd yet someone left that in my mailbox yesterday. No note. Just the key.\u201d\nI finally picked it up. Still warm, somehow. \u201cYou sure it\u2019s his?\u201d\n\u201cI used to live there,\u201d she said. \u201cI know what his keys felt like.\u201d\n\u201cYou think he\u2019s alive?\u201d\n\u201cI think someone wants me to think he is.\u201d\nI leaned back. The rain was getting louder. \u201cTell me the truth, Clara. You said you never went back after the fire.\u201d\n\u201cI didn\u2019t.\u201d\n\u201cYou\u2019re lying.\u201d\nShe looked up sharply.\n\u201cThe super saw you. Last month. Apartment 3C. Same day someone torched the files in the basement.\u201d\n\u201cI wasn\u2019t\u2014\u201d She swallowed. \u201cI didn\u2019t start the fire.\u201d\n\u201cBut you were there.\u201d\nShe leaned in, voice low. \u201cYou have no idea what he was into. What he left behind.\u201d\n\u201cThen tell me.\u201d\nShe hesitated, eyes flicking to the door like she expected someone to burst in.\nThen: \u201cIt wasn\u2019t just keys he hid. It was people.\u201d\nAnd just like that, I knew I\u2019d already waited too long to walk away.\n",
+  "force_alignment_available": true,
+  "word_timestamps_count": 254,
+  "effects_identified": 3,
+  "effects": [
+    {
+      "effect_name": "rain-window-tap",
+      "description": "Soft rain tapping against caf\u00e9 window panes",
+      "start_word": "Rain",
+      "end_word": "windows",
+      "prompt": "gentle rain tapping on glass, soft and rhythmic, high quality ambient sound",
+      "rank": 1,
+      "start_word_number": 12,
+      "end_word_number": 16
+    },
+    {
+      "effect_name": "brass-key-slide",
+      "description": "Metallic sound of brass key sliding across wooden table surface",
+      "start_word": "slid",
+      "end_word": "table",
+      "prompt": "brass key sliding across wooden table, subtle metallic scraping sound, crisp and clear",
+      "rank": 2,
+      "start_word_number": 37,
+      "end_word_number": 44
+    },
+    {
+      "effect_name": "door-expectation",
+      "description": "Subtle tension of potential door opening",
+      "start_word": "expected",
+      "end_word": "in",
+      "prompt": "anticipatory sound of potential door opening, slight creak, suspenseful",
+      "rank": 3,
+      "start_word_number": 228,
+      "end_word_number": 232
+    }
+  ],
+  "timestamp": "2025-06-22T16:34:12.997635"
+}

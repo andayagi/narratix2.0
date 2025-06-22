@@ -36,6 +36,19 @@ class Settings:
         self.ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
         self.HUME_API_KEY = os.getenv("HUME_API_KEY", "")
         self.REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
+        
+        # Production Environment Configuration
+        self.ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+        self.BASE_URL = self._get_base_url()
+        
+        # CORS Configuration
+        self.CORS_ORIGINS = self._get_cors_origins()
+        
+        # Webhook Monitoring Configuration
+        self.WEBHOOK_MONITORING_ENABLED = os.getenv("WEBHOOK_MONITORING_ENABLED", "true").lower() == "true"
+        self.WEBHOOK_FAILURE_ALERT_THRESHOLD = int(os.getenv("WEBHOOK_FAILURE_ALERT_THRESHOLD", "5"))
+        self.WEBHOOK_TIMEOUT_SECONDS = int(os.getenv("WEBHOOK_TIMEOUT_SECONDS", "30"))
+        
         self.PROJECT_ROOT = PROJECT_ROOT
         self.OUTPUT_DIR = OUTPUT_DIR
         self.LOGS_DIR = LOGS_DIR
@@ -45,6 +58,55 @@ class Settings:
         self.WHISPERX_MODEL_SIZE = os.getenv("WHISPERX_MODEL_SIZE", "base")
         self.WHISPERX_COMPUTE_TYPE = os.getenv("WHISPERX_COMPUTE_TYPE", "float32")
         self.SOUND_EFFECTS_VOLUME_LEVEL = float(os.getenv("SOUND_EFFECTS_VOLUME_LEVEL", "0.3"))
+    
+    def _get_base_url(self) -> str:
+        """Get BASE_URL with proper HTTPS validation for production."""
+        base_url = os.getenv("BASE_URL", "http://localhost:8000")
+        
+        # Ensure HTTPS in production
+        if self.ENVIRONMENT == "production":
+            if not base_url.startswith("https://"):
+                logger.warning(f"Production BASE_URL should use HTTPS: {base_url}")
+                # Auto-correct http to https in production
+                if base_url.startswith("http://"):
+                    base_url = base_url.replace("http://", "https://", 1)
+                    logger.info(f"Auto-corrected BASE_URL to HTTPS: {base_url}")
+                elif not base_url.startswith("https://"):
+                    base_url = f"https://{base_url}"
+                    logger.info(f"Added HTTPS prefix to BASE_URL: {base_url}")
+        
+        return base_url
+    
+    def _get_cors_origins(self) -> List[str]:
+        """Get CORS origins based on environment."""
+        if self.ENVIRONMENT == "production":
+            # Restrict CORS origins in production
+            origins_str = os.getenv("CORS_ORIGINS", "")
+            if origins_str:
+                origins = [origin.strip() for origin in origins_str.split(",")]
+                logger.info(f"Production CORS origins: {origins}")
+                return origins
+            else:
+                logger.warning("No CORS_ORIGINS specified for production environment")
+                return []
+        else:
+            # Allow all origins in development
+            return ["*"]
+    
+    def is_production(self) -> bool:
+        """Check if running in production environment."""
+        return self.ENVIRONMENT == "production"
+    
+    def get_webhook_url(self, content_type: str, content_id: int) -> str:
+        """Construct webhook URL with proper validation."""
+        url = f"{self.BASE_URL}/api/replicate-webhook/{content_type}/{content_id}"
+        
+        # Validate HTTPS in production
+        if self.is_production() and not url.startswith("https://"):
+            logger.error(f"Webhook URL must use HTTPS in production: {url}")
+            raise ValueError(f"Webhook URL must use HTTPS in production: {url}")
+        
+        return url
 
 # Create a singleton settings instance
 settings = Settings()

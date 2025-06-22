@@ -6,7 +6,7 @@ import sys
 import json
 from db.database import SessionLocal
 from db import crud
-from services.force_alignment import force_alignment_service
+from services.combine_export_audio import force_alignment_service
 
 def main():
     # Get database session
