@@ -138,6 +138,53 @@ python scripts/indie-services/background_music_standalone.py --text_id 34 --time
 - Replicate API key configured
 - Webhook endpoint accessible for Replicate callbacks
 
+## Speech Generation
+
+**Script:** `speech_generation.py`
+
+Generates speech audio for all segments of a text using Hume AI's text-to-speech API.
+
+### Usage:
+
+```bash
+# Generate speech for existing text segments
+python3 scripts/indie-services/speech_generation.py --text_id 123
+```
+
+### What it does:
+1. **Validation**: Checks prerequisites for speech generation:
+   - Verifies text exists in database
+   - Confirms segments exist (requires text analysis to be run first)
+   - Validates characters have voice assignments (requires voice generation to be run first)
+
+2. **Cleanup**: Clears existing audio data:
+   - Removes audio_data_b64 from all segments for the text_id
+   - Keeps all other segment data intact
+
+3. **Generation**: Creates speech audio using Hume API:
+   - Uses parallel batch processing for efficiency
+   - Maintains narrative coherence with continuation context
+   - Handles retry logic for failed generations
+   - Stores base64 encoded audio data in database
+
+4. **Storage**: Saves results to database:
+   - Updates segment records with audio_data_b64
+   - Invalidates existing force alignment data (if present)
+   - Provides detailed progress logging
+
+### Requirements:
+- Database connection configured
+- Hume API key set in environment
+- Text must be analyzed first (segments and characters must exist)
+- Characters must have voice provider IDs assigned (voice generation must be run first)
+
+### Output:
+The script provides detailed logging and a summary of results including:
+- Number of segments processed
+- Number of segments with generated audio
+- Number of previously cleared audio segments
+- Speech generation completion status
+
 ## Other Services
 
 Additional standalone services will be added here as they are developed. 
