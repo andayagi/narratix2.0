@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -40,10 +40,14 @@ async def get_sound_effects_for_text(text_id: int, db: Session = Depends(get_db)
     return effects
 
 @router.post("/text/{text_id}/generate", status_code=202)
-async def generate_sound_effects_for_text(text_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def generate_sound_effects_for_text(text_id: int, background_tasks: BackgroundTasks, force: bool = Query(False, description="Force regeneration of existing sound effects"), db: Session = Depends(get_db)):
     """
     Generates audio for all sound effects of a text IN PARALLEL.
     This is a long-running background task.
+    
+    Args:
+        text_id: ID of the text to generate sound effects for
+        force: Force regeneration of existing sound effects
     """
     db_text = crud.get_text(db, text_id)
     if not db_text:
@@ -55,12 +59,22 @@ async def generate_sound_effects_for_text(text_id: int, background_tasks: Backgr
         raise HTTPException(status_code=404, detail="No sound effects found for this text")
     
     # Check if any effects need generation
-    effects_needing_generation = [effect for effect in sound_effects if not effect.audio_data_b64]
+    if force:
+        # Clear existing audio data if force=true
+        for effect in sound_effects:
+            if effect.audio_data_b64:
+                effect.audio_data_b64 = ""  # Use empty string instead of None due to NOT NULL constraint
+        db.commit()
+        effects_needing_generation = sound_effects
+        message_suffix = " (forced regeneration)"
+    else:
+        effects_needing_generation = [effect for effect in sound_effects if not effect.audio_data_b64 or effect.audio_data_b64.strip() == ""]
+        message_suffix = ""
     
     if effects_needing_generation:
         # Use parallel generation for all effects at once
         background_tasks.add_task(sfx_service.generate_and_store_all_effects_parallel, db, text_id)
-        return {"message": f"PARALLEL audio generation for {len(effects_needing_generation)} sound effects has been initiated in the background."}
+        return {"message": f"PARALLEL audio generation for {len(effects_needing_generation)} sound effects has been initiated in the background{message_suffix}."}
     else:
         return {"message": f"All {len(sound_effects)} sound effects already have generated audio."}
 

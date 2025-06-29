@@ -197,16 +197,30 @@ async def process_webhook_success(
         db.close()
 
 async def process_sound_effect_webhook_result(db: Session, effect_id: int, payload_data: Dict[str, Any]):
-    """Process sound effect webhook result - TODO: implement with shared audio processing"""
-    # This will be implemented in the next task when we create the shared audio processing
-    logger.info(f"TODO: Process sound effect {effect_id} webhook result")
-    pass
+    """Process sound effect webhook result using shared audio processing"""
+    from services.replicate_audio import process_webhook_result
+    
+    try:
+        success = process_webhook_result("sound_effect", effect_id, payload_data)
+        if success:
+            logger.info(f"Successfully processed sound effect {effect_id} webhook result")
+        else:
+            logger.error(f"Failed to process sound effect {effect_id} webhook result")
+    except Exception as e:
+        logger.error(f"Error processing sound effect {effect_id} webhook: {e}")
 
 async def process_background_music_webhook_result(db: Session, text_id: int, payload_data: Dict[str, Any]):
-    """Process background music webhook result - TODO: implement with shared audio processing"""
-    # This will be implemented in the next task when we create the shared audio processing
-    logger.info(f"TODO: Process background music {text_id} webhook result")
-    pass
+    """Process background music webhook result using shared audio processing"""
+    from services.replicate_audio import process_webhook_result
+    
+    try:
+        success = process_webhook_result("background_music", text_id, payload_data)
+        if success:
+            logger.info(f"Successfully processed background music {text_id} webhook result")
+        else:
+            logger.error(f"Failed to process background music {text_id} webhook result")
+    except Exception as e:
+        logger.error(f"Error processing background music {text_id} webhook: {e}")
 
 async def mark_generation_failed(
     content_type: str,

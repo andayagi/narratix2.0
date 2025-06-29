@@ -351,8 +351,8 @@ async def run_text_analysis(text_id: int) -> bool:
         return False
 
 async def run_voice_generation(text_id: int) -> bool:
-    """Run voice generation for all characters (existing endpoints)"""
-    print("🎙️  Running voice generation (existing endpoints)...")
+    """Run voice generation for all characters in parallel (existing endpoints)"""
+    print("🎙️  Running voice generation (existing endpoints) - PARALLEL MODE...")
     try:
         # Get characters
         client = get_api_client()
@@ -363,13 +363,21 @@ async def run_voice_generation(text_id: int) -> bool:
             
         characters = response.json()
         
-        # Generate voices for each character
-        generated_count = 0
-        for character in characters:
-            if character.get('provider_id'):
-                print(f"⏭️  Character {character['name']} already has voice")
-                continue
-                    
+        # Filter characters that need voice generation
+        characters_needing_voices = [c for c in characters if not c.get('provider_id')]
+        characters_with_voices = [c for c in characters if c.get('provider_id')]
+        
+        if characters_with_voices:
+            print(f"⏭️  {len(characters_with_voices)} characters already have voices")
+        
+        if not characters_needing_voices:
+            print("✅ Voice generation completed (all voices already exist)")
+            return True
+        
+        print(f"🚀 Generating voices for {len(characters_needing_voices)} characters in PARALLEL...")
+        
+        # Create parallel tasks for voice generation
+        async def generate_character_voice(character):
             print(f"🎙️  Generating voice for {character['name']}...")
             response = client.post(
                 f"/api/character/{character['id']}/voice",
@@ -380,16 +388,31 @@ async def run_voice_generation(text_id: int) -> bool:
                 print(f"❌ Failed to generate voice for {character['name']}")
                 return False
             
-            generated_count += 1
-                
-        if generated_count > 0:
-            print(f"✅ Voice generation completed ({generated_count} voices generated)")
-        else:
-            print("✅ Voice generation completed (all voices already exist)")
-        return True
+            print(f"✅ Voice generated for {character['name']}")
+            return True
+        
+        # Execute all voice generations in parallel
+        voice_tasks = [generate_character_voice(char) for char in characters_needing_voices]
+        voice_results = await asyncio.gather(*voice_tasks, return_exceptions=True)
+        
+        # Process results
+        successful_generations = 0
+        failed_generations = 0
+        
+        for i, result in enumerate(voice_results):
+            if isinstance(result, Exception):
+                print(f"❌ Voice generation failed for {characters_needing_voices[i]['name']}: {result}")
+                failed_generations += 1
+            elif result:
+                successful_generations += 1
+            else:
+                failed_generations += 1
+        
+        print(f"✅ Parallel voice generation completed: {successful_generations} successful, {failed_generations} failed")
+        return failed_generations == 0
         
     except Exception as e:
-        print(f"❌ Error in voice generation: {str(e)}")
+        print(f"❌ Error in parallel voice generation: {str(e)}")
         return False
 
 async def run_speech_generation(text_id: int) -> bool:
@@ -450,13 +473,13 @@ async def run_bg_music_generation(text_id: int) -> bool:
     print("🎼 Testing NEW ENDPOINT: /api/background-music/{text_id}/process")
     try:
         client = get_api_client()
-        response = client.post(f"/api/background-music/{text_id}/process")
+        response = client.post(f"/api/background-music/{text_id}/process?force=true")
         print(f"Background Music Endpoint Response: {response.status_code}")
         if response.status_code not in [200, 202]:
             print(f"❌ NEW ENDPOINT ERROR: {response.text}")
             return False
             
-        print("✅ NEW ENDPOINT SUCCESS: Background music generation completed")
+        print("✅ NEW ENDPOINT SUCCESS: Background music generation triggered")
         
         # Test GET endpoints
         print("🎼 Testing GET /api/background-music/{text_id}")
@@ -464,7 +487,7 @@ async def run_bg_music_generation(text_id: int) -> bool:
         if response.status_code == 200:
             print("✅ NEW ENDPOINT SUCCESS: Background music status retrieved")
             
-        return True
+        return True  # Return immediately after triggering webhook
             
     except Exception as e:
         print(f"❌ NEW ENDPOINT ERROR: {str(e)}")
@@ -475,16 +498,71 @@ async def run_sfx_generation(text_id: int) -> bool:
     print("🔊 Running sound effects generation (existing endpoint)...")
     try:
         client = get_api_client()
-        response = client.post(f"/api/sound-effects/text/{text_id}/generate")
+        response = client.post(f"/api/sound-effects/text/{text_id}/generate?force=true")
         if response.status_code in [200, 202]:
-            print("✅ Sound effects generation completed")
-            return True
+            print("✅ Sound effects generation triggered")
+            return True  # Return immediately after triggering webhook
         else:
             print(f"❌ Sound effects generation failed: {response.text}")
             return False
             
     except Exception as e:
         print(f"❌ Error in sound effects generation: {str(e)}")
+        return False
+
+async def reset_text_pipeline_data(text_id: int) -> bool:
+    """Reset all pipeline data for a text, keeping only the original text content"""
+    print(f"🗑️  Resetting all pipeline data for text {text_id}...")
+    
+    try:
+        db = SessionLocal()
+        try:
+            # Get the text object
+            text_obj = crud.get_text(db, text_id)
+            if not text_obj:
+                print(f"❌ Text {text_id} not found")
+                return False
+            
+            # Clear text analysis data
+            text_obj.analyzed = False
+            text_obj.word_timestamps = None
+            text_obj.background_music_prompt = None
+            text_obj.background_music_audio_b64 = None
+            
+            # Delete all characters for this text
+            characters = crud.get_characters_by_text(db, text_id)
+            deleted_characters = 0
+            for character in characters:
+                crud.delete_character(db, character.character_id)
+                deleted_characters += 1
+            
+            # Delete all segments for this text
+            segments = crud.get_segments_by_text(db, text_id)
+            deleted_segments = 0
+            for segment in segments:
+                crud.delete_segment(db, segment.segment_id)
+                deleted_segments += 1
+            
+            # Delete all sound effects for this text
+            deleted_sound_effects = crud.delete_sound_effects_by_text(db, text_id)
+            
+            # Commit all changes
+            db.commit()
+            
+            print(f"✅ Pipeline data reset complete:")
+            print(f"   🗑️  Deleted {deleted_characters} characters")
+            print(f"   🗑️  Deleted {deleted_segments} segments") 
+            print(f"   🗑️  Deleted {deleted_sound_effects} sound effects")
+            print(f"   🗑️  Cleared background music data")
+            print(f"   🗑️  Reset analysis flags")
+            
+            return True
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        print(f"❌ Error resetting pipeline data: {str(e)}")
         return False
 
 async def run_audio_combining(text_id: int) -> str:
@@ -526,67 +604,174 @@ async def run_audio_combining(text_id: int) -> str:
         return None
 
 async def run_adaptive_pipeline(text_id: int) -> Dict[str, Any]:
-    """Execute full adaptive pipeline that runs all services as they become available - TESTING ALL NEW ENDPOINTS"""
+    """Execute full pipeline - RESET EVERYTHING then regenerate from scratch"""
     results = {}
     
-    # Define service execution order with dependencies
-    service_order = [
-        "text_analysis",
-        "audio_analysis", 
-        "voice_generation",
-        "speech_generation",
-        "bg_music_generation",
-        "sfx_generation",
-        "audio_combining"
-    ]
-    
-    print("🚀 Running adaptive full pipeline - COMPREHENSIVE ENDPOINT TESTING...")
-    print("🎯 This will test all new dedicated endpoints:")
+    print("🚀 Running FULL PIPELINE - COMPLETE RESET AND REGENERATION...")
+    print("🎯 This will test all new dedicated endpoints with MAXIMUM PARALLELIZATION:")
     print("   📝 /api/text-analysis/")
     print("   🎵 /api/audio-analysis/")
     print("   🎼 /api/background-music/")
     print("   🎬 /api/export/")
     print("   🔊 /api/sound-effects/ (existing)")
+    print("🚀 PIPELINE: Reset → Analysis → (Voice+Speech) || (BG Music + SFX) → Final Audio")
     
-    for service in service_order:
-        # Check current pipeline status
-        status = await get_pipeline_status(text_id)
-        options = get_service_options(status)
+    # Phase 0: Reset all existing pipeline data
+    print("\n🗑️  Phase 0: Complete Pipeline Reset...")
+    
+    # Check if text has any existing pipeline data
+    initial_status = await get_pipeline_status(text_id)
+    has_existing_data = (
+        initial_status.text_analyzed or 
+        initial_status.characters_count > 0 or 
+        initial_status.segments_count > 0 or 
+        initial_status.sound_effects_count > 0 or
+        initial_status.has_bg_music_prompt or 
+        initial_status.has_bg_music_audio
+    )
+    
+    if has_existing_data:
+        print(f"🔍 Detected existing pipeline data for text {text_id}")
+        print("🗑️  Performing complete reset to ensure clean regeneration...")
         
-        # Skip if service not available or already completed
-        if not options.get(service, False):
-            print(f"⏭️  Skipping {service} - not available or already completed")
-            continue
-            
-        # Execute the service
-        print(f"\n🔄 Testing {service} endpoints...")
-        
-        if service == "text_analysis":
-            results[service] = await run_text_analysis(text_id)
-        elif service == "audio_analysis":
-            results[service] = await run_audio_analysis(text_id)
-        elif service == "voice_generation":
-            results[service] = await run_voice_generation(text_id)
-        elif service == "speech_generation":
-            results[service] = await run_speech_generation(text_id)
-        elif service == "bg_music_generation":
-            results[service] = await run_bg_music_generation(text_id)
-        elif service == "sfx_generation":
-            results[service] = await run_sfx_generation(text_id)
-        elif service == "audio_combining":
-            output_path = await run_audio_combining(text_id)
-            results[service] = output_path is not None
-            if output_path:
-                results["output_path"] = output_path
-        
-        # Stop pipeline immediately if critical service fails
-        if not results.get(service, False) and service in ["text_analysis", "voice_generation", "speech_generation"]:
-            print(f"❌ CRITICAL FAILURE: {service} failed, stopping pipeline immediately")
-            print(f"💥 Pipeline execution terminated due to critical service failure")
+        reset_success = await reset_text_pipeline_data(text_id)
+        if not reset_success:
+            print("❌ CRITICAL FAILURE: Failed to reset pipeline data")
             results["pipeline_status"] = "FAILED"
-            results["failed_service"] = service
+            results["failed_service"] = "reset_pipeline_data"
             return results
+        
+        print("✅ Reset complete - text is now ready for full regeneration")
+    else:
+        print("✅ Text has no existing pipeline data - proceeding with fresh generation")
+    
+    # Phase 1: Sequential Analysis (dependencies require this)
+    print("\n🔄 Phase 1: Sequential Analysis Phase...")
+    # Text analysis (always run since we reset everything)
+    results["text_analysis"] = await run_text_analysis(text_id)
+    if not results["text_analysis"]:
+        print("❌ CRITICAL FAILURE: text_analysis failed, stopping pipeline")
+        results["pipeline_status"] = "FAILED"
+        results["failed_service"] = "text_analysis"
+        return results
+    
+    # Audio analysis (always run since we reset everything)
+    print("🎵 Running audio analysis...")
+    results["audio_analysis"] = await run_audio_analysis(text_id)
+    if not results["audio_analysis"]:
+        print("❌ CRITICAL FAILURE: audio_analysis failed, stopping pipeline")
+        results["pipeline_status"] = "FAILED"
+        results["failed_service"] = "audio_analysis"
+        return results
+    
+    # Phase 2: TRUE PARALLEL EXECUTION
+    print("\n🚀 Phase 2: PARALLEL Track Execution...")
+    
+    parallel_tasks = []
+    
+    # TRACK 1: Speech Generation (Voice → Speech)
+    async def speech_track():
+        track_results = {}
+        print("🎤 TRACK 1: Speech Generation (Voice → Speech)")
+        
+        # Generate character voices (always needed since we reset)
+        print("🎙️  Generating character voices in parallel...")
+        track_results["voice_generation"] = await run_voice_generation(text_id)
+        if not track_results["voice_generation"]:
+            print("❌ CRITICAL: Voice generation failed in speech track")
+            track_results["pipeline_status"] = "FAILED"
+            track_results["failed_service"] = "voice_generation"
+            return track_results
+        
+        # Generate speech audio (always needed since we reset)
+        print("🗣️  Generating speech audio...")
+        track_results["speech_generation"] = await run_speech_generation(text_id)
+        if not track_results["speech_generation"]:
+            print("❌ CRITICAL: Speech generation failed in speech track")
+            track_results["pipeline_status"] = "FAILED"
+            track_results["failed_service"] = "speech_generation"
+            return track_results
             
+        print("✅ TRACK 1 COMPLETED: Speech generation track")
+        return track_results
+    
+    # TRACK 2: Audio Generation (BG Music || SFX in parallel)
+    async def audio_generation_track():
+        track_results = {}
+        print("🎵 TRACK 2: Audio Generation (BG Music || SFX)")
+        
+        # Both background music and sound effects always needed since we reset
+        print("🎼 Adding background music generation to parallel tasks...")
+        print("🔊 Adding sound effects generation to parallel tasks...")
+        
+        audio_tasks = [
+            ("bg_music", run_bg_music_generation(text_id)),
+            ("sfx", run_sfx_generation(text_id))
+        ]
+        
+        # Execute audio generation tasks in parallel
+        print(f"🚀 Executing {len(audio_tasks)} audio generation tasks in PARALLEL...")
+        audio_results = await asyncio.gather(*[task for _, task in audio_tasks], return_exceptions=True)
+        
+        # Process parallel audio results
+        for i, (task_name, _) in enumerate(audio_tasks):
+            result = audio_results[i]
+            if isinstance(result, Exception):
+                print(f"❌ {task_name} failed: {result}")
+                track_results[f"{task_name}_generation"] = False
+            else:
+                track_results[f"{task_name}_generation"] = result
+                print(f"✅ {task_name} webhook triggered: {result}")
+        
+        # Now wait for both to complete in parallel
+        bg_triggered = track_results.get("bg_music_generation", False)
+        sfx_triggered = track_results.get("sfx_generation", False)
+        
+        if bg_triggered or sfx_triggered:
+            completion_results = await wait_for_audio_generation_completion(text_id, bg_triggered, sfx_triggered)
+            # Update results based on actual completion
+            if bg_triggered:
+                track_results["bg_music_generation"] = completion_results["bg_music_completed"]
+            if sfx_triggered:
+                track_results["sfx_generation"] = completion_results["sfx_completed"]
+        
+        print("✅ TRACK 2 COMPLETED: Audio generation track")
+        return track_results
+    
+    # Execute both tracks in PARALLEL
+    print("🚀 Executing Speech Track || Audio Track in PARALLEL...")
+    parallel_tasks = [speech_track(), audio_generation_track()]
+    
+    track_results = await asyncio.gather(*parallel_tasks, return_exceptions=True)
+    
+    # Process parallel track results
+    for i, track_result in enumerate(track_results):
+        track_name = "Speech Track" if i == 0 else "Audio Track"
+        if isinstance(track_result, Exception):
+            print(f"❌ {track_name} failed completely: {track_result}")
+            results["pipeline_status"] = "FAILED"
+            results["failed_service"] = f"{track_name.lower().replace(' ', '_')}_exception"
+            return results
+        elif isinstance(track_result, dict):
+            results.update(track_result)
+            # Check for critical failures reported by tracks
+            if track_result.get("pipeline_status") == "FAILED":
+                print(f"💥 Critical failure in {track_name}")
+                return results
+    
+    print("✅ PARALLEL TRACKS COMPLETED SUCCESSFULLY")
+    
+    # Phase 3: Final Audio Assembly
+    print("\n🎬 Phase 3: Final Audio Assembly...")
+    output_path = await run_audio_combining(text_id)
+    results["audio_combining"] = output_path is not None
+    if output_path:
+        results["output_path"] = output_path
+        print(f"✅ Final audio created: {output_path}")
+    else:
+        print("❌ Final audio assembly failed")
+    
+    print("🎉 TRULY PARALLEL ADAPTIVE PIPELINE COMPLETED!")
     return results
 
 async def run_parallel_pipeline(text_id: int, services: List[str]) -> Dict[str, Any]:
@@ -629,16 +814,31 @@ async def run_parallel_pipeline(text_id: int, services: List[str]) -> Dict[str, 
         async def speech_track():
             track_results = {}
             print(f"\n🎤 Testing speech track endpoints: {speech_services}")
-            # Voice generation must come before speech generation
+            
+            # Execute speech services in parallel where possible
+            speech_tasks = []
+            
             if "voice_generation" in speech_services:
-                track_results["voice_generation"] = await run_voice_generation(text_id)
-                if not track_results.get("voice_generation", False):
-                    print(f"❌ CRITICAL FAILURE: voice_generation failed in parallel track")
-                    track_results["pipeline_status"] = "FAILED"
-                    track_results["failed_service"] = "voice_generation"
-                    return track_results
-                    
-            if "speech_generation" in speech_services:
+                speech_tasks.append(("voice_generation", run_voice_generation(text_id)))
+            
+            # Speech generation depends on voice generation, so we handle it after
+            voice_completed = True
+            if speech_tasks:
+                # Run voice generation first (if needed)
+                voice_results = await asyncio.gather(*[task for _, task in speech_tasks], return_exceptions=True)
+                for i, (task_name, _) in enumerate(speech_tasks):
+                    result = voice_results[i]
+                    if isinstance(result, Exception):
+                        print(f"❌ CRITICAL FAILURE: {task_name} failed in parallel track: {result}")
+                        track_results["pipeline_status"] = "FAILED"
+                        track_results["failed_service"] = task_name
+                        return track_results
+                    else:
+                        track_results[task_name] = result
+                        voice_completed = voice_completed and result
+            
+            # Now run speech generation if needed and voice generation succeeded
+            if "speech_generation" in speech_services and voice_completed:
                 track_results["speech_generation"] = await run_speech_generation(text_id)
                 if not track_results.get("speech_generation", False):
                     print(f"❌ CRITICAL FAILURE: speech_generation failed in parallel track")
@@ -656,21 +856,42 @@ async def run_parallel_pipeline(text_id: int, services: List[str]) -> Dict[str, 
         async def audio_track():
             track_results = {}
             print(f"\n🎵 Testing audio track endpoints: {audio_services}")
-            # BG music and SFX can run in parallel
+            # BG music and SFX can run in parallel - trigger both then wait
             audio_tasks = []
             
-            if "bg_music_generation" in audio_services:
+            bg_music_in_services = "bg_music_generation" in audio_services
+            sfx_in_services = "sfx_generation" in audio_services
+            
+            if bg_music_in_services:
                 audio_tasks.append(run_bg_music_generation(text_id))
-            if "sfx_generation" in audio_services:
+            if sfx_in_services:
                 audio_tasks.append(run_sfx_generation(text_id))
                 
             if audio_tasks:
+                # Trigger both webhooks in parallel
+                print("🔄 Triggering audio generation webhooks in parallel...")
                 audio_results = await asyncio.gather(*audio_tasks, return_exceptions=True)
-                if "bg_music_generation" in audio_services:
-                    track_results["bg_music_generation"] = audio_results[0] if not isinstance(audio_results[0], Exception) else False
-                if "sfx_generation" in audio_services:
-                    idx = 1 if "bg_music_generation" in audio_services else 0
-                    track_results["sfx_generation"] = audio_results[idx] if not isinstance(audio_results[idx], Exception) else False
+                
+                # Check if webhooks were successfully triggered
+                bg_music_triggered = False
+                sfx_triggered = False
+                
+                if bg_music_in_services:
+                    bg_music_triggered = audio_results[0] if not isinstance(audio_results[0], Exception) else False
+                    track_results["bg_music_generation"] = bg_music_triggered
+                if sfx_in_services:
+                    idx = 1 if bg_music_in_services else 0
+                    sfx_triggered = audio_results[idx] if not isinstance(audio_results[idx], Exception) else False
+                    track_results["sfx_generation"] = sfx_triggered
+                
+                # Now wait for both to complete in parallel
+                if bg_music_triggered or sfx_triggered:
+                    completion_results = await wait_for_audio_generation_completion(text_id, bg_music_triggered, sfx_triggered)
+                    # Update results based on actual completion
+                    if bg_music_triggered:
+                        track_results["bg_music_generation"] = completion_results["bg_music_completed"]
+                    if sfx_triggered:
+                        track_results["sfx_generation"] = completion_results["sfx_completed"]
                     
             return track_results
             
