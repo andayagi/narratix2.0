@@ -64,7 +64,6 @@ async def test_generate_character_voice(db_session, test_text, test_character, m
     
     # Generate voice using REAL API call - now with await
     voice_id = await generate_character_voice(
-        db=db_session,
         character_id=test_character.id,
         character_name=test_character.name,
         character_description=test_character.description,
@@ -96,7 +95,6 @@ async def test_generate_character_voice_no_segments(db_session, test_text, test_
     
     # Generate voice for character without segments
     voice_id = await generate_character_voice(
-        db=db_session,
         character_id=test_character.id,
         character_name=test_character.name,
         character_description=test_character.description,

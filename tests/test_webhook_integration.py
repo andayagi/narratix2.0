@@ -23,11 +23,12 @@ from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from pathlib import Path
 
-# Add project root to Python path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Add project root to path for imports
+PROJECT_ROOT = Path(__file__).parent.parent
+import sys
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.logging import SessionLogger
 SessionLogger.start_session(f"test_webhook_integration_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
@@ -43,13 +44,13 @@ from services.replicate_audio import (
     BackgroundMusicProcessor
 )
 from services.sound_effects import (
-    analyze_text_for_sound_effects,
     generate_and_store_effect
 )
 from services.background_music import (
-    generate_background_music_prompt,
-    generate_background_music
+    generate_background_music,
+    update_text_with_music_prompt
 )
+from services.audio_analysis import analyze_text_for_audio
 
 # Skip tests if required API keys are not available
 skip_integration = False
@@ -94,15 +95,51 @@ def test_text(db_session):
 
 @pytest.fixture
 def test_sound_effects(db_session, test_text):
-    """Generate test sound effects for the text"""
+    """Generate test sound effects for the text using audio_analysis service"""
     # Clean up existing effects
     existing_effects = crud.get_sound_effects_by_text(db_session, test_text.id)
     for effect in existing_effects:
         crud.delete_sound_effect(db_session, effect.effect_id)
     
-    # Generate new effects using real API
-    effects = analyze_text_for_sound_effects(db_session, test_text.id)
-    return effects
+    # Generate new effects using unified audio analysis
+    _, sound_effects = analyze_text_for_audio(test_text.id)
+    
+    # Store the sound effects in database
+    stored_effects = []
+    for effect in sound_effects:
+        try:
+            start_word_number = effect.get('start_word_number')
+            end_word_number = effect.get('end_word_number')
+            rank = effect.get('rank', 999)
+            
+            # Calculate total_time based on word count
+            total_time = None
+            if start_word_number is not None and end_word_number is not None:
+                word_count = end_word_number - start_word_number + 1
+                total_time = max(1, word_count)
+            else:
+                total_time = 2  # Default 2 seconds
+            
+            stored_effect = crud.create_sound_effect(
+                db=db_session,
+                effect_name=effect['effect_name'],
+                text_id=test_text.id,
+                start_word=effect['start_word'],
+                end_word=effect['end_word'],
+                start_word_position=start_word_number,
+                end_word_position=end_word_number,
+                prompt=effect['prompt'],
+                audio_data_b64="",
+                start_time=None,
+                end_time=None,
+                total_time=total_time,
+                rank=rank
+            )
+            stored_effects.append(stored_effect)
+        except Exception as e:
+            print(f"Error storing sound effect '{effect['effect_name']}': {e}")
+    
+    return stored_effects
 
 @pytest.fixture
 def mock_audio_data():
@@ -241,7 +278,8 @@ class TestWebhookBackgroundMusicWorkflow:
     """Test full background music workflow: trigger → webhook → processing → storage"""
     
     @pytest.mark.integration
-    def test_full_background_music_workflow_with_mocked_replicate(self, db_session, test_text, test_output_dir, mock_audio_data):
+    @pytest.mark.asyncio
+    async def test_full_background_music_workflow_with_mocked_replicate(self, db_session, test_text, test_output_dir, mock_audio_data):
         """Test complete background music workflow with mocked Replicate calls"""
         print(f"\n=== Testing Full Background Music Webhook Workflow ===")
         
@@ -264,7 +302,7 @@ class TestWebhookBackgroundMusicWorkflow:
             
             # Trigger background music generation (should return immediately with webhook)
             trigger_time = time.time()
-            generate_background_music(db_session, text_id)
+            await generate_background_music(text_id)
             trigger_duration = time.time() - trigger_time
             
             # Verify webhook prediction was created
@@ -383,12 +421,13 @@ class TestParallelProcessing:
             
             def trigger_sound_effect(effect_id):
                 start = time.time()
-                generate_and_store_effect(db_session, effect_id)
+                generate_and_store_effect(effect_id)
                 return effect_id, time.time() - start
             
             def trigger_background_music(text_id):
+                import asyncio
                 start = time.time()
-                generate_background_music(db_session, text_id)
+                asyncio.run(generate_background_music(text_id))
                 return text_id, time.time() - start
             
             # Use ThreadPoolExecutor for parallel triggers

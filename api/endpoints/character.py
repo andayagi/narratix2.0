@@ -97,7 +97,6 @@ async def create_character_voice(
     # Generate voice
     try:
         voice_id = await generate_character_voice(
-            db=db,
             character_id=character_id,
             character_name=character.name,
             character_description=character.description or "",

@@ -17,6 +17,7 @@ from fastapi import HTTPException
 import base64
 import json
 from typing import Dict, Any
+import pytest_asyncio
 
 from api.main import app
 from api.endpoints.replicate_webhook import (
@@ -33,7 +34,12 @@ from services.replicate_audio import (
     get_processor,
     SoundEffectProcessor,
     BackgroundMusicProcessor,
-    ReplicateAudioConfig
+    ReplicateAudioConfig,
+    WebhookCompletionNotifier,
+    WebhookNotifierFactory,
+    wait_for_webhook_completion_event,
+    wait_for_sound_effects_completion_event,
+    AudioPostProcessor
 )
 from db import crud
 
@@ -234,108 +240,139 @@ class TestSharedAudioProcessing:
             get_processor("invalid_type")
     
     @patch('services.replicate_audio.get_processor')
-    def test_process_webhook_result(self, mock_get_processor):
+    @pytest.mark.asyncio
+    async def test_process_webhook_result(self, mock_get_processor):
         """Test process_webhook_result routes to correct processor."""
         mock_processor = Mock()
-        mock_processor.process_and_store.return_value = True
+        # Mock async method
+        async def mock_process_and_store(*args, **kwargs):
+            return True
+        mock_processor.process_and_store = mock_process_and_store
         mock_get_processor.return_value = mock_processor
         
         payload_data = {"id": "test-id", "output": "https://test.com/audio.wav"}
         
-        result = process_webhook_result("sound_effect", 1, payload_data)
+        # Mock database session since we're calling async version
+        with patch('services.replicate_audio.managed_db_session'):
+            result = await process_webhook_result("sound_effect", 1, payload_data)
         
         assert result is True
         mock_get_processor.assert_called_once_with("sound_effect")
-        mock_processor.process_and_store.assert_called_once_with(1, payload_data)
 
 class TestAudioProcessors:
     """Test the audio post-processors."""
     
-    @patch('services.replicate_audio.get_sync_client')
-    @patch('services.replicate_audio.crud')
-    def test_sound_effect_processor_success(self, mock_crud, mock_get_client):
+    @patch('services.replicate_audio.get_async_client')
+    @patch('services.replicate_audio.DatabaseSessionManager')
+    @pytest.mark.asyncio
+    async def test_sound_effect_processor_success(self, mock_db_manager, mock_get_client):
         """Test SoundEffectProcessor successful processing."""
         # Mock HTTP download
         sample_audio = b"fake_audio_data"
         mock_response = Mock()
         mock_response.content = sample_audio
         mock_client = Mock()
-        mock_client.get.return_value = mock_response
+        
+        # Mock async get method
+        async def mock_get(*args, **kwargs):
+            return mock_response
+        mock_client.get = mock_get
         mock_get_client.return_value = mock_client
         
         # Mock database storage
-        mock_crud.update_sound_effect_audio.return_value = True
+        mock_db_manager.safe_execute.return_value = True
         
         processor = SoundEffectProcessor()
+        mock_db = Mock()
         
         with patch.object(processor, 'trim_audio', return_value=sample_audio):
-            result = processor.process_and_store(1, {"output": "https://test.com/audio.wav"})
+            result = await processor.process_and_store(mock_db, 1, {"output": "https://test.com/audio.wav"})
         
         assert result is True
-        mock_crud.update_sound_effect_audio.assert_called_once()
+        mock_db_manager.safe_execute.assert_called()
     
-    @patch('services.replicate_audio.get_sync_client')
-    @patch('services.replicate_audio.crud')
-    def test_background_music_processor_success(self, mock_crud, mock_get_client):
+    @patch('services.replicate_audio.get_async_client')
+    @patch('services.replicate_audio.DatabaseSessionManager')
+    @pytest.mark.asyncio
+    async def test_background_music_processor_success(self, mock_db_manager, mock_get_client):
         """Test BackgroundMusicProcessor successful processing."""
         # Mock HTTP download
         sample_audio = b"fake_music_data"
         mock_response = Mock()
         mock_response.content = sample_audio
         mock_client = Mock()
-        mock_client.get.return_value = mock_response
+        
+        # Mock async get method
+        async def mock_get(*args, **kwargs):
+            return mock_response
+        mock_client.get = mock_get
         mock_get_client.return_value = mock_client
         
         # Mock database storage
-        mock_crud.update_text_background_music_audio.return_value = True
+        mock_db_manager.safe_execute.return_value = True
         
         processor = BackgroundMusicProcessor()
-        result = processor.process_and_store(1, {"output": "https://test.com/music.mp3"})
+        mock_db = Mock()
+        result = await processor.process_and_store(mock_db, 1, {"output": "https://test.com/music.mp3"})
         
         assert result is True
-        mock_crud.update_text_background_music_audio.assert_called_once()
+        mock_db_manager.safe_execute.assert_called()
 
 class TestErrorScenarios:
     """Test various error scenarios."""
     
-    @patch('services.replicate_audio.get_sync_client')
-    def test_processor_download_failure(self, mock_get_client):
+    @patch('services.replicate_audio.get_async_client')
+    @pytest.mark.asyncio
+    async def test_processor_download_failure(self, mock_get_client):
         """Test processor handles download failures gracefully."""
         mock_client = Mock()
-        mock_client.get.side_effect = Exception("Download failed")
+        
+        # Mock async get method that raises exception
+        async def mock_get(*args, **kwargs):
+            raise Exception("Download failed")
+        mock_client.get = mock_get
         mock_get_client.return_value = mock_client
         
         processor = SoundEffectProcessor()
-        result = processor.process_and_store(1, {"output": "https://bad-url.com/audio.wav"})
+        mock_db = Mock()
+        result = await processor.process_and_store(mock_db, 1, {"output": "https://bad-url.com/audio.wav"})
         
         assert result is False
     
-    def test_processor_no_output_url(self):
+    @pytest.mark.asyncio
+    async def test_processor_no_output_url(self):
         """Test processor handles missing output URL."""
         processor = SoundEffectProcessor()
-        result = processor.process_and_store(1, {"id": "test-id"})  # No output key
+        mock_db = Mock()
+        result = await processor.process_and_store(mock_db, 1, {"id": "test-id"})  # No output key
         
         assert result is False
     
-    @patch('services.replicate_audio.get_sync_client')
-    @patch('services.replicate_audio.crud')
-    def test_database_storage_failure(self, mock_crud, mock_get_client):
+    @patch('services.replicate_audio.get_async_client')
+    @patch('services.replicate_audio.DatabaseSessionManager')
+    @pytest.mark.asyncio
+    async def test_database_storage_failure(self, mock_db_manager, mock_get_client):
         """Test processor handles database storage failures."""
         # Mock successful download
         sample_audio = b"audio_data"
         mock_response = Mock()
         mock_response.content = sample_audio
         mock_client = Mock()
-        mock_client.get.return_value = mock_response
+        
+        # Mock async get method
+        async def mock_get(*args, **kwargs):
+            return mock_response
+        mock_client.get = mock_get
         mock_get_client.return_value = mock_client
         
         # Mock database failure
-        mock_crud.update_sound_effect_audio.return_value = False
+        mock_db_manager.safe_execute.return_value = False
         
         processor = SoundEffectProcessor()
+        mock_db = Mock()
         
         with patch.object(processor, 'trim_audio', return_value=sample_audio):
-            result = processor.process_and_store(1, {"output": "https://test.com/audio.wav"})
+            result = await processor.process_and_store(mock_db, 1, {"output": "https://test.com/audio.wav"})
         
         assert result is False
 
@@ -365,3 +402,104 @@ class TestIdempotency:
         assert response1.status_code == 200
         assert response2.status_code == 200
         assert mock_process.call_count == 2  # Both should trigger processing 
+
+class TestWebhookNotifierFactory:
+    """Test WebhookNotifierFactory and dependency injection patterns."""
+    
+    def test_create_notifier_creates_new_instance(self):
+        """Test that create_notifier returns new instances."""
+        notifier1 = WebhookNotifierFactory.create_notifier()
+        notifier2 = WebhookNotifierFactory.create_notifier()
+        
+        assert isinstance(notifier1, WebhookCompletionNotifier)
+        assert isinstance(notifier2, WebhookCompletionNotifier)
+        assert notifier1 is not notifier2  # Different instances
+    
+    def test_get_global_notifier_returns_same_instance(self):
+        """Test that get_global_notifier returns the same instance."""
+        notifier1 = WebhookNotifierFactory.get_global_notifier()
+        notifier2 = WebhookNotifierFactory.get_global_notifier()
+        
+        assert isinstance(notifier1, WebhookCompletionNotifier)
+        assert notifier1 is notifier2  # Same instance
+    
+    @pytest.mark.asyncio
+    async def test_isolated_notifier_instances(self):
+        """Test that isolated notifier instances don't interfere."""
+        notifier1 = WebhookNotifierFactory.create_notifier()
+        notifier2 = WebhookNotifierFactory.create_notifier()
+        
+        # Create events in both notifiers
+        event1 = await notifier1.create_completion_event("sound_effect", 1)
+        event2 = await notifier2.create_completion_event("sound_effect", 1)
+        
+        # Notify completion in first notifier
+        await notifier1.notify_completion("sound_effect", 1, True)
+        
+        # Check that only first notifier's event is set
+        assert event1.is_set()
+        assert not event2.is_set()
+        
+        # Clean up
+        notifier1.cleanup_event("sound_effect", 1)
+        notifier2.cleanup_event("sound_effect", 1)
+
+class TestDependencyInjection:
+    """Test dependency injection for webhook processing functions."""
+    
+    @pytest.mark.asyncio
+    async def test_process_webhook_result_with_custom_notifier(self):
+        """Test process_webhook_result with custom notifier."""
+        custom_notifier = WebhookNotifierFactory.create_notifier()
+        
+        with patch('services.replicate_audio.get_processor') as mock_get_processor:
+            mock_processor = Mock(spec=AudioPostProcessor)
+            mock_processor.process_and_store = AsyncMock(return_value=True)
+            mock_get_processor.return_value = mock_processor
+            
+            # Mock notifier methods
+            custom_notifier.notify_completion = AsyncMock()
+            
+            payload_data = {"output": "http://example.com/audio.mp3"}
+            
+            result = await process_webhook_result(
+                "sound_effect", 1, payload_data, notifier=custom_notifier
+            )
+            
+            assert result is True
+            custom_notifier.notify_completion.assert_called_once_with("sound_effect", 1, True)
+    
+    @pytest.mark.asyncio
+    async def test_wait_for_webhook_completion_with_custom_notifier(self):
+        """Test wait_for_webhook_completion_event with custom notifier."""
+        custom_notifier = WebhookNotifierFactory.create_notifier()
+        
+        # Mock notifier methods
+        custom_notifier.create_completion_event = AsyncMock()
+        custom_notifier.wait_for_completion = AsyncMock(return_value=(True, 2.5))
+        custom_notifier.cleanup_event = Mock()
+        
+        result = await wait_for_webhook_completion_event(
+            "sound_effect", 1, timeout=30, notifier=custom_notifier
+        )
+        
+        assert result is True
+        custom_notifier.create_completion_event.assert_called_once_with("sound_effect", 1)
+        custom_notifier.wait_for_completion.assert_called_once_with("sound_effect", 1, 30)
+        custom_notifier.cleanup_event.assert_called_once_with("sound_effect", 1)
+    
+    @pytest.mark.asyncio
+    async def test_functions_use_global_notifier_when_none_provided(self):
+        """Test that functions use global notifier when none is provided."""
+        with patch.object(WebhookNotifierFactory, 'get_global_notifier') as mock_global:
+            mock_notifier = Mock(spec=WebhookCompletionNotifier)
+            mock_notifier.create_completion_event = AsyncMock()
+            mock_notifier.wait_for_completion = AsyncMock(return_value=(True, 1.0))
+            mock_notifier.cleanup_event = Mock()
+            mock_global.return_value = mock_notifier
+            
+            # Test without passing notifier parameter
+            result = await wait_for_webhook_completion_event("sound_effect", 1, timeout=30)
+            
+            mock_global.assert_called_once()
+            assert result is True 

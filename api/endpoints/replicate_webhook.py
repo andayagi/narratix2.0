@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.orm import Session
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, Optional
 from pydantic import BaseModel
 
 from db.database import get_db
@@ -20,14 +20,14 @@ class WebhookPayload(BaseModel):
     id: str
     version: str
     created_at: str
-    started_at: str = None
-    completed_at: str = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
     status: Literal["starting", "processing", "succeeded", "failed", "canceled"]
     input: Dict[str, Any]
-    output: Any = None
-    error: str = None
-    logs: str = None
-    metrics: Dict[str, Any] = None
+    output: Optional[Any] = None
+    error: Optional[str] = None
+    logs: Optional[str] = None
+    metrics: Optional[Dict[str, Any]] = None
 
 @router.post("/{content_type}/{content_id}")
 async def handle_replicate_webhook(
@@ -201,7 +201,7 @@ async def process_sound_effect_webhook_result(db: Session, effect_id: int, paylo
     from services.replicate_audio import process_webhook_result
     
     try:
-        success = process_webhook_result("sound_effect", effect_id, payload_data)
+        success = await process_webhook_result("sound_effect", effect_id, payload_data)
         if success:
             logger.info(f"Successfully processed sound effect {effect_id} webhook result")
         else:
@@ -214,7 +214,7 @@ async def process_background_music_webhook_result(db: Session, text_id: int, pay
     from services.replicate_audio import process_webhook_result
     
     try:
-        success = process_webhook_result("background_music", text_id, payload_data)
+        success = await process_webhook_result("background_music", text_id, payload_data)
         if success:
             logger.info(f"Successfully processed background music {text_id} webhook result")
         else:

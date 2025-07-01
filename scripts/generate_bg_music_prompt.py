@@ -8,6 +8,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from services import background_music
+from services.audio_analysis import analyze_text_for_audio
 from db.database import SessionLocal
 from utils.config import validate_config
 from utils.logging import get_logger
@@ -27,13 +28,16 @@ def main():
     # Create database session
     db = SessionLocal()
     try:
-        # Generate background music prompt
-        music_prompt = background_music.generate_background_music_prompt(db, args.text_id)
+        # Generate background music prompt using audio analysis
+        soundscape, _ = analyze_text_for_audio(args.text_id)
         
-        if music_prompt:
+        if soundscape:
+            # Store the prompt in database
+            background_music.update_text_with_music_prompt(db, args.text_id, soundscape)
+            
             print(f"Successfully generated background music prompt for text {args.text_id}:")
             print("-" * 80)
-            print(music_prompt)
+            print(soundscape)
             print("-" * 80)
             return 0
         else:

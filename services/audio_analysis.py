@@ -3,40 +3,37 @@ Unified audio analysis service that combines sound effects and background music 
 This service replaces separate calls to Claude for each audio type with a single unified analysis.
 """
 import json
-import anthropic
 from typing import Dict, List, Any, Optional, Tuple
-from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from utils.config import settings
 from db import crud
+from db.session_manager import managed_db_session
 # Removed force alignment dependency - using word placement instead
 from utils.timing import time_it
-
-# Initialize Anthropic client
-client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+from services.clients import ClientFactory
 
 logger = get_logger(__name__)
 
 @time_it("unified_audio_analysis")
-def analyze_text_for_audio(db: Session, text_id: int) -> Tuple[Optional[str], List[Dict]]:
+def analyze_text_for_audio(text_id: int) -> Tuple[Optional[str], List[Dict]]:
     """
     Unified analysis that generates both soundscape and sound effects in a single Claude call.
     
     Args:
-        db: Database session
         text_id: ID of the text to analyze
         
     Returns:
         Tuple of (soundscape_prompt, sound_effects_list)
     """
     # Get text content from database
-    db_text = crud.get_text(db, text_id)
-    if not db_text:
-        logger.error(f"Text with ID {text_id} not found")
-        return None, []
-    
-    full_text = db_text.content
+    with managed_db_session() as db:
+        db_text = crud.get_text(db, text_id)
+        if not db_text:
+            logger.error(f"Text with ID {text_id} not found")
+            return None, []
+        
+        full_text = db_text.content
     
     # Create word placement data (word with numerical position)
     words = full_text.split()
@@ -72,7 +69,7 @@ def analyze_text_for_audio(db: Session, text_id: int) -> Tuple[Optional[str], Li
                 logger.info("Anthropic API Request for unified audio analysis")
             
             # Single call to Claude for both analyses
-            message = client.messages.create(
+            message = ClientFactory.get_anthropic_client().messages.create(
                 model="claude-3-5-haiku-20241022",
                 max_tokens=3854,
                 temperature=0,
@@ -166,7 +163,7 @@ def analyze_text_for_audio(db: Session, text_id: int) -> Tuple[Optional[str], Li
 # Removed find_word_timing function - no longer needed with word placement approach
 
 @time_it("process_audio_analysis")
-def process_audio_analysis_for_text(db: Session, text_id: int) -> Tuple[bool, Optional[str], List[Dict]]:
+def process_audio_analysis_for_text(text_id: int) -> Tuple[bool, Optional[str], List[Dict]]:
     """
     Complete end-to-end audio analysis processing:
     1. Analyze text with unified Claude call for both soundscape and sound effects
@@ -174,25 +171,25 @@ def process_audio_analysis_for_text(db: Session, text_id: int) -> Tuple[bool, Op
     3. Store sound effects in database
     
     Args:
-        db: Database session
         text_id: ID of the text to process
         
     Returns:
         Tuple of (success, soundscape_prompt, sound_effects_list)
     """
     # Delete existing sound effects and clear background music audio to avoid duplicates
-    deleted_count = crud.delete_sound_effects_by_text(db, text_id)
-    logger.info(f"Deleted {deleted_count} existing sound effects for text {text_id}")
-    
-    # Clear any existing background music audio data
-    db_text = crud.get_text(db, text_id)
-    if db_text and db_text.background_music_audio_b64:
-        db_text.background_music_audio_b64 = None
-        db.commit()
-        logger.info(f"Cleared existing background music audio for text {text_id}")
+    with managed_db_session() as db:
+        deleted_count = crud.delete_sound_effects_by_text(db, text_id)
+        logger.info(f"Deleted {deleted_count} existing sound effects for text {text_id}")
+        
+        # Clear any existing background music audio data
+        db_text = crud.get_text(db, text_id)
+        if db_text and db_text.background_music_audio_b64:
+            db_text.background_music_audio_b64 = None
+            db.commit()
+            logger.info(f"Cleared existing background music audio for text {text_id}")
     
     # Run unified analysis
-    soundscape, sound_effects = analyze_text_for_audio(db, text_id)
+    soundscape, sound_effects = analyze_text_for_audio(text_id)
     
     if not soundscape and not sound_effects:
         logger.error(f"Audio analysis failed for text {text_id}")
@@ -201,62 +198,64 @@ def process_audio_analysis_for_text(db: Session, text_id: int) -> Tuple[bool, Op
     # Store soundscape as background music prompt
     if soundscape:
         try:
-            db_text = crud.get_text(db, text_id)
-            if db_text:
-                db_text.background_music_prompt = soundscape
-                db.commit()
-                logger.info(f"Stored soundscape as background music prompt for text {text_id}")
+            with managed_db_session() as db:
+                db_text = crud.get_text(db, text_id)
+                if db_text:
+                    db_text.background_music_prompt = soundscape
+                    db.commit()
+                    logger.info(f"Stored soundscape as background music prompt for text {text_id}")
         except Exception as e:
             logger.error(f"Error storing soundscape: {e}")
     
     # Apply text length filtering for sound effects
     if sound_effects:
-        text_length = len(crud.get_text(db, text_id).content)
-        max_effects = max(1, text_length // 700)
-        
-        logger.info(f"Text length: {text_length} characters, allowing max {max_effects} sound effects")
-        
-        # Sort by rank and limit
-        for effect in sound_effects:
-            try:
-                effect['rank'] = int(effect.get('rank', 999))
-            except (ValueError, TypeError):
-                effect['rank'] = 999
-        
-        sound_effects.sort(key=lambda x: x['rank'])
-        sound_effects = sound_effects[:max_effects]
-        
-        # Store sound effects in database
-        for effect in sound_effects:
-            try:
-                start_word_number = effect.get('start_word_number')
-                end_word_number = effect.get('end_word_number')
-                
-                # Calculate a default duration based on word count (1 second per word)
-                total_time = None
-                if start_word_number is not None and end_word_number is not None:
-                    word_count = end_word_number - start_word_number + 1
-                    total_time = max(1, word_count)  # At least 1 second
-                else:
-                    total_time = 2  # Default 2 seconds for sound effects
-                
-                crud.create_sound_effect(
-                    db=db,
-                    effect_name=effect['effect_name'],
-                    text_id=text_id,
-                    start_word=effect['start_word'],
-                    end_word=effect['end_word'],
-                    start_word_position=start_word_number,
-                    end_word_position=end_word_number,
-                    prompt=effect['prompt'],
-                    audio_data_b64="",
-                    start_time=None,  # No timing data with word placement approach
-                    end_time=None,    # No timing data with word placement approach
-                    total_time=total_time,
-                    rank=effect['rank']
-                )
-                logger.info(f"Stored sound effect '{effect['effect_name']}' for text {text_id} (words {start_word_number}-{end_word_number})")
-            except Exception as e:
-                logger.error(f"Error storing sound effect '{effect['effect_name']}': {e}")
+        with managed_db_session() as db:
+            text_length = len(crud.get_text(db, text_id).content)
+            max_effects = max(1, text_length // 700)
+            
+            logger.info(f"Text length: {text_length} characters, allowing max {max_effects} sound effects")
+            
+            # Sort by rank and limit
+            for effect in sound_effects:
+                try:
+                    effect['rank'] = int(effect.get('rank', 999))
+                except (ValueError, TypeError):
+                    effect['rank'] = 999
+            
+            sound_effects.sort(key=lambda x: x['rank'])
+            sound_effects = sound_effects[:max_effects]
+            
+            # Store sound effects in database
+            for effect in sound_effects:
+                try:
+                    start_word_number = effect.get('start_word_number')
+                    end_word_number = effect.get('end_word_number')
+                    
+                    # Calculate a default duration based on word count (1 second per word)
+                    total_time = None
+                    if start_word_number is not None and end_word_number is not None:
+                        word_count = end_word_number - start_word_number + 1
+                        total_time = max(1, word_count)  # At least 1 second
+                    else:
+                        total_time = 2  # Default 2 seconds for sound effects
+                    
+                    crud.create_sound_effect(
+                        db=db,
+                        effect_name=effect['effect_name'],
+                        text_id=text_id,
+                        start_word=effect['start_word'],
+                        end_word=effect['end_word'],
+                        start_word_position=start_word_number,
+                        end_word_position=end_word_number,
+                        prompt=effect['prompt'],
+                        audio_data_b64="",
+                        start_time=None,  # No timing data with word placement approach
+                        end_time=None,    # No timing data with word placement approach
+                        total_time=total_time,
+                        rank=effect['rank']
+                    )
+                    logger.info(f"Stored sound effect '{effect['effect_name']}' for text {text_id} (words {start_word_number}-{end_word_number})")
+                except Exception as e:
+                    logger.error(f"Error storing sound effect '{effect['effect_name']}': {e}")
     
-    return True, soundscape, sound_effects 
+    return True, soundscape, sound_effects

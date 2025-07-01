@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 from utils.config import Settings
 from utils.logging import get_logger
 from db import crud, models
+from db.session_manager import managed_db_session
 from utils.timing import time_it
+from services.clients import ClientFactory
 
 # Import the Hume SDK client
-from hume import AsyncHumeClient
 from hume.tts import PostedUtterance
 
 # Initialize logger
@@ -23,7 +24,6 @@ RETRY_DELAY = 1
 
 @time_it("generate_character_voice")
 async def generate_character_voice(
-    db: Session, 
     character_id: int, 
     character_name: str, 
     character_description: str,
@@ -36,18 +36,15 @@ async def generate_character_voice(
     Only generates voices for characters that have assigned segments.
     If force_regenerate is True, deletes existing voice before creating new one.
     """
-    # Check if character has any segments
-    segments = db.query(models.TextSegment).filter(models.TextSegment.character_id == character_id).all()
-    if not segments:
-        logger.info(f"Skipping voice generation for character {character_id} ({character_name}) - no assigned segments")
-        return None
-    
-    # Ensure we're using the latest API key from environment
-    current_settings = Settings()
-    api_key = os.getenv("HUME_API_KEY") or current_settings.HUME_API_KEY
+    with managed_db_session() as db:
+        # Check if character has any segments
+        segments = db.query(models.TextSegment).filter(models.TextSegment.character_id == character_id).all()
+        if not segments:
+            logger.info(f"Skipping voice generation for character {character_id} ({character_name}) - no assigned segments")
+            return None
     
     # Initialize the Hume SDK client
-    hume_client = AsyncHumeClient(api_key=api_key)
+    hume_client = ClientFactory.get_hume_async_client()
     
     # Step 2: Save the generated voice with naming format [name]_[text_id]
     voice_name = f"{character_name}_{text_id}"
@@ -62,11 +59,11 @@ async def generate_character_voice(
             # Voice might not exist or delete failed - continue with generation
             logger.info(f"Could not delete voice '{voice_name}' (might not exist): {str(e)}")
     
-    # Get current character to check if voice already exists
-    character = crud.get_character(db, character_id)
-    if character and character.provider_id and not force_regenerate:
-        logger.info(f"Character {character_name} already has voice {character.provider_id}, skipping generation")
-        return character.provider_id
+        # Get current character to check if voice already exists
+        character = crud.get_character(db, character_id)
+        if character and character.provider_id and not force_regenerate:
+            logger.info(f"Character {character_name} already has voice {character.provider_id}, skipping generation")
+            return character.provider_id
     
     retry_count = 0
     while retry_count < MAX_RETRIES:
@@ -124,7 +121,8 @@ async def generate_character_voice(
             voice_id = save_response.id
 
             # Save provider_id and provider to the database
-            crud.update_character_voice(db, character_id, voice_id, provider="HUME")
+            with managed_db_session() as db:
+                crud.update_character_voice(db, character_id, voice_id, provider="HUME")
             logger.info(f"Successfully created voice {voice_id} for character {character_name}")
             return voice_id
             
@@ -148,12 +146,11 @@ async def generate_character_voice(
             time.sleep(RETRY_DELAY)
 
 @time_it("parallel_voice_generation")
-async def generate_all_character_voices_parallel(db: Session, text_id: int) -> List[Tuple[int, Optional[str]]]:
+async def generate_all_character_voices_parallel(text_id: int) -> List[Tuple[int, Optional[str]]]:
     """
     Generate voices for all characters of a text in parallel.
     
     Args:
-        db: Database session
         text_id: ID of the text to generate voices for
         
     Returns:
@@ -161,35 +158,35 @@ async def generate_all_character_voices_parallel(db: Session, text_id: int) -> L
     """
     logger.info(f"Starting parallel voice generation for text {text_id}")
     
-    # Get all characters for this text
-    characters = crud.get_characters_by_text(db, text_id)
-    if not characters:
-        logger.warning(f"No characters found for text {text_id}")
-        return []
-    
-    logger.info(f"Found {len(characters)} characters for parallel voice generation")
-    
-    # Create tasks for parallel voice generation
-    voice_tasks = []
-    character_info = []
-    
-    for character in characters:
-        # Only create tasks for speaking characters with segments
-        segments = db.query(models.TextSegment).filter(models.TextSegment.character_id == character.id).all()
-        if not segments:
-            logger.info(f"Skipping character {character.id} ({character.name}) - no assigned segments")
-            continue
-            
-        character_info.append(character)
-        task = generate_character_voice(
-            db=db,
-            character_id=character.id,
-            character_name=character.name,
-            character_description=character.description or f"Character named {character.name}",
-            character_intro_text=character.intro_text or f"Hello, I am {character.name}.",
-            text_id=text_id
-        )
-        voice_tasks.append(task)
+    with managed_db_session() as db:
+        # Get all characters for this text
+        characters = crud.get_characters_by_text(db, text_id)
+        if not characters:
+            logger.warning(f"No characters found for text {text_id}")
+            return []
+        
+        logger.info(f"Found {len(characters)} characters for parallel voice generation")
+        
+        # Create tasks for parallel voice generation
+        voice_tasks = []
+        character_info = []
+        
+        for character in characters:
+            # Only create tasks for speaking characters with segments
+            segments = db.query(models.TextSegment).filter(models.TextSegment.character_id == character.id).all()
+            if not segments:
+                logger.info(f"Skipping character {character.id} ({character.name}) - no assigned segments")
+                continue
+                
+            character_info.append(character)
+            task = generate_character_voice(
+                character_id=character.id,
+                character_name=character.name,
+                character_description=character.description or f"Character named {character.name}",
+                character_intro_text=character.intro_text or f"Hello, I am {character.name}.",
+                text_id=text_id
+            )
+            voice_tasks.append(task)
     
     if not voice_tasks:
         logger.warning(f"No characters with segments found for text {text_id}")

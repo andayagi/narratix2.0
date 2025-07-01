@@ -19,9 +19,8 @@ SessionLogger.start_session(f"test_background_music_{datetime.now().strftime('%Y
 from db import models, crud
 from utils.config import settings
 from services.background_music import (
-    generate_background_music_prompt,
     generate_background_music,
-    process_background_music_for_text
+    update_text_with_music_prompt
 )
 
 # Verify required API keys are present
@@ -135,7 +134,8 @@ def test_generate_background_music_prompt(db_session, test_text):
     print(f"Generated music prompt: {music_prompt}")
 
 @pytest.mark.integration
-def test_generate_background_music(db_session, test_text, test_segment):
+@pytest.mark.asyncio
+async def test_generate_background_music(db_session, test_text, test_segment):
     """Test generating background music using Replicate API and storing in DB"""
     # First ensure we have a prompt
     if not test_text.background_music_prompt:
@@ -143,7 +143,7 @@ def test_generate_background_music(db_session, test_text, test_segment):
         assert music_prompt is not None, "Failed to generate music prompt"
     
     # Generate background music
-    success = generate_background_music(db=db_session, text_id=test_text.id)
+    success = await generate_background_music(text_id=test_text.id)
     
     # Verify music was generated and stored
     assert success is True, "Background music generation should succeed"

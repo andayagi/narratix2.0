@@ -9,6 +9,7 @@ from db import crud
 from services import background_music
 from utils.config import settings
 from utils.logging import get_logger
+from db.session_manager import managed_db_session
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -17,6 +18,32 @@ router = APIRouter(
     prefix="/api/background-music",
     tags=["background-music"],
 )
+
+async def complete_background_music_processing(text_id: int):
+    """
+    Complete background music processing task:
+    1. Generate prompt using audio analysis
+    2. Generate audio using background music service
+    """
+    with managed_db_session() as db:
+        try:
+            # Step 1: Generate prompt using audio analysis
+            from services.audio_analysis import analyze_text_for_audio
+            soundscape, _ = analyze_text_for_audio(text_id)
+            
+            if soundscape:
+                # Store the prompt
+                background_music.update_text_with_music_prompt(text_id, soundscape)
+                
+                # Step 2: Generate audio
+                await background_music.generate_background_music(text_id)
+                
+                logger.info(f"Completed background music processing for text {text_id}")
+            else:
+                logger.error(f"Failed to generate soundscape for text {text_id}")
+                
+        except Exception as e:
+            logger.error(f"Error in background music processing for text {text_id}: {e}")
 
 @router.post("/{text_id}/generate-prompt")
 async def generate_music_prompt(
@@ -47,14 +74,19 @@ async def generate_music_prompt(
         )
     
     try:
-        # Generate music prompt
-        music_prompt = background_music.generate_background_music_prompt(db, text_id)
+        # Generate music prompt using audio analysis
+        from services.audio_analysis import analyze_text_for_audio
+        soundscape, _ = analyze_text_for_audio(text_id)
         
-        if not music_prompt:
+        if not soundscape:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to generate music prompt"
             )
+        
+        # Store the prompt in database
+        music_prompt = soundscape
+        background_music.update_text_with_music_prompt(text_id, music_prompt)
         
         logger.info(f"Successfully generated music prompt for text ID {text_id}")
         
@@ -112,7 +144,7 @@ async def generate_music_audio(
     
     try:
         # Generate music audio
-        success = background_music.generate_background_music(db, text_id)
+        success = await background_music.generate_background_music(text_id)
         
         if not success:
             raise HTTPException(
@@ -182,10 +214,10 @@ async def process_background_music(
             }
         }
     
-    # Add background task for processing
+    # Add background task for processing (prompt + audio generation)
     background_tasks.add_task(
-        background_music.process_background_music_for_text,
-        db, text_id
+        complete_background_music_processing,
+        text_id
     )
     
     return {

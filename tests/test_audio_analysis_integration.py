@@ -101,7 +101,7 @@ class TestAudioAnalysisIntegration:
         mock_client.messages.create.return_value = mock_response
         
         # Execute the function
-        soundscape, sound_effects = analyze_text_for_audio(self.db, self.test_text.id)
+        soundscape, sound_effects = analyze_text_for_audio(self.test_text.id)
         
         # Verify results
         assert soundscape is not None
@@ -133,7 +133,7 @@ class TestAudioAnalysisIntegration:
         mock_client.messages.create.return_value = mock_response
         
         # Execute the function
-        soundscape, sound_effects = analyze_text_for_audio(self.db, self.test_text.id)
+        soundscape, sound_effects = analyze_text_for_audio(self.test_text.id)
         
         # Verify error handling
         assert soundscape is None
@@ -146,7 +146,7 @@ class TestAudioAnalysisIntegration:
         mock_client.messages.create.side_effect = Exception("API Error")
         
         # Execute the function
-        soundscape, sound_effects = analyze_text_for_audio(self.db, self.test_text.id)
+        soundscape, sound_effects = analyze_text_for_audio(self.test_text.id)
         
         # Verify error handling
         assert soundscape is None
@@ -155,7 +155,7 @@ class TestAudioAnalysisIntegration:
     def test_analyze_text_for_audio_nonexistent_text(self):
         """Test handling of non-existent text ID"""
         # Use non-existent text ID
-        soundscape, sound_effects = analyze_text_for_audio(self.db, 99999)
+        soundscape, sound_effects = analyze_text_for_audio(99999)
         
         # Verify error handling
         assert soundscape is None
@@ -172,7 +172,7 @@ class TestAudioAnalysisIntegration:
         
         # Execute the function
         success, soundscape, sound_effects = process_audio_analysis_for_text(
-            self.db, self.test_text.id
+            self.test_text.id
         )
         
         # Verify success
@@ -217,7 +217,7 @@ class TestAudioAnalysisIntegration:
         try:
             # Execute the function
             success, soundscape, sound_effects = process_audio_analysis_for_text(
-                self.db, short_text.id
+                short_text.id
             )
             
             # Verify success
@@ -260,7 +260,7 @@ class TestAudioAnalysisIntegration:
         try:
             # Execute the function
             success, soundscape, sound_effects = process_audio_analysis_for_text(
-                self.db, long_text.id
+                long_text.id
             )
             
             # Verify success
@@ -342,7 +342,7 @@ class TestAudioAnalysisIntegration:
         
         # Execute the function
         success, soundscape, sound_effects = process_audio_analysis_for_text(
-            self.db, self.test_text.id
+            self.test_text.id
         )
         
         # Verify success
@@ -378,7 +378,7 @@ class TestAudioAnalysisIntegration:
         
         # Execute the function
         success, soundscape, sound_effects = process_audio_analysis_for_text(
-            self.db, self.test_text.id
+            self.test_text.id
         )
         
         # Verify success (should still work with default values)

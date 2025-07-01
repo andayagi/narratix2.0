@@ -3,12 +3,12 @@ import subprocess
 import base64
 import tempfile
 from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
 from datetime import datetime
 
 from utils.logging import get_logger
 from utils.timing import time_it
 from db import crud
+from db.session_manager import managed_db_session
 
 # Import force alignment dependencies
 try:
@@ -95,14 +95,13 @@ class ForceAlignmentService:
 # Global instance
 force_alignment_service = ForceAlignmentService()
 
-def _run_force_alignment_on_combined_audio(combined_audio_path: str, text_content: str, db: Session, text_id: int) -> bool:
+def _run_force_alignment_on_combined_audio(combined_audio_path: str, text_content: str, text_id: int) -> bool:
     """
     Run force alignment on the combined audio and store results in database.
     
     Args:
         combined_audio_path: Path to the combined audio file
         text_content: Complete text content
-        db: Database session
         text_id: ID of the text
         
     Returns:
@@ -116,7 +115,8 @@ def _run_force_alignment_on_combined_audio(combined_audio_path: str, text_conten
         
         if word_timestamps:
             # Store with current timestamp
-            crud.update_text_word_timestamps(db, text_id, word_timestamps)
+            with managed_db_session() as db:
+                crud.update_text_word_timestamps(db, text_id, word_timestamps)
             logger.info(f"Successfully completed force alignment for text ID {text_id}, got {len(word_timestamps)} word timestamps")
             return True
         else:
@@ -153,13 +153,12 @@ def _match_word_position_to_timestamp(word_position: int, word_timestamps: List[
     return None
 
 @time_it("combine_speech_segments")
-def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, trailing_silence: float = 0.0) -> Optional[str]:
+async def combine_speech_segments(text_id: int, output_dir: str = None, trailing_silence: float = 0.0) -> Optional[str]:
     """
     Combine all speech segments for a given text into a single audio file.
     This function now includes force alignment before combining.
     
     Args:
-        db: Database session
         text_id: ID of the text to process
         output_dir: Directory to save the combined audio (defaults to 'output' in current directory)
         trailing_silence: Amount of silence (in seconds) to add after each segment
@@ -168,14 +167,15 @@ def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, t
         Path to the combined audio file, or None if error
     """
     try:
-        # Get text content for force alignment
-        db_text = crud.get_text(db, text_id)
-        if not db_text:
-            logger.error(f"Text with ID {text_id} not found")
-            return None
-        
-        # Get all segments for the text, ordered by sequence
-        segments = crud.get_segments_by_text(db, text_id)
+        # Get text content for force alignment and segments
+        with managed_db_session() as db:
+            db_text = crud.get_text(db, text_id)
+            if not db_text:
+                logger.error(f"Text with ID {text_id} not found")
+                return None
+            
+            # Get all segments for the text, ordered by sequence
+            segments = crud.get_segments_by_text(db, text_id)
         if not segments:
             logger.error(f"No segments found for text ID {text_id}")
             return None
@@ -311,7 +311,7 @@ def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, t
         # NEW: Run force alignment on the combined audio
         logger.info(f"Running force alignment on combined audio for text ID {text_id}")
         force_alignment_success = _run_force_alignment_on_combined_audio(
-            combined_audio_path, db_text.content, db, text_id
+            combined_audio_path, db_text.content, text_id
         )
         
         if not force_alignment_success:
@@ -325,7 +325,7 @@ def combine_speech_segments(db: Session, text_id: int, output_dir: str = None, t
         return None
 
 @time_it("export_final_audio")
-def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_volume: float = 0.15, trailing_silence: float = 0.0, target_lufs: float = -18.0, fx_volume: float = 0.3) -> Optional[str]:
+async def export_final_audio(text_id: int, output_dir: str = None, bg_volume: float = 0.15, trailing_silence: float = 0.0, target_lufs: float = -18.0, fx_volume: float = 0.3) -> Optional[str]:
     """
     Create a final audio export by:
     1. Combining all speech segments into one audio file
@@ -336,7 +336,6 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
     6. Continue background music for 3 seconds after speech ends with fade out
     
     Args:
-        db: Database session
         text_id: ID of the text to process
         output_dir: Directory to save output files (defaults to 'output' in current directory)
         bg_volume: Background music volume (0.15 = 15%, optimal for graphic audio)
@@ -355,7 +354,7 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
         
         # Step 1: Combine speech segments
         logger.info(f"Combining speech segments for text ID {text_id}")
-        combined_speech_path = combine_speech_segments(db, text_id, output_dir, trailing_silence)
+        combined_speech_path = await combine_speech_segments(text_id, output_dir, trailing_silence)
         if not combined_speech_path:
             logger.error(f"Failed to combine speech segments for text ID {text_id}")
             return None
@@ -389,12 +388,13 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
         
         # Step 3: Process sound effects using word position matching
         logger.info(f"Processing sound effects for text ID {text_id}")
-        sound_effects = crud.get_sound_effects_by_text(db, text_id)
-        sound_effects_with_audio = []
+        with managed_db_session() as db:
+            sound_effects = crud.get_sound_effects_by_text(db, text_id)
+            # Get word timestamps from force alignment for sound effect positioning
+            db_text = crud.get_text(db, text_id)
+            word_timestamps = db_text.word_timestamps if db_text else None
         
-        # Get word timestamps from force alignment for sound effect positioning
-        db_text = crud.get_text(db, text_id)
-        word_timestamps = db_text.word_timestamps if db_text else None
+        sound_effects_with_audio = []
         
         for effect in sound_effects:
             # Skip effects without audio data
@@ -444,15 +444,19 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
                 continue
         
         # Step 4: Get background music from database
-        db_text = crud.get_text(db, text_id)
-        if not db_text or not db_text.background_music_audio_b64:
-            logger.warning(f"No background music found for text {text_id}")
-            # Mix speech with sound effects only
-            if sound_effects_with_audio:
-                return _mix_speech_with_sound_effects(temp_norm_speech, sound_effects_with_audio, fx_volume, final_audio_path, temp_files)
-            else:
-                # Return normalized speech only
-                return temp_norm_speech
+        with managed_db_session() as db:
+            db_text = crud.get_text(db, text_id)
+            if not db_text or not db_text.background_music_audio_b64:
+                logger.warning(f"No background music found for text {text_id}")
+                # Mix speech with sound effects only
+                if sound_effects_with_audio:
+                    return _mix_speech_with_sound_effects(temp_norm_speech, sound_effects_with_audio, fx_volume, final_audio_path, temp_files)
+                else:
+                    # Return normalized speech only
+                    return temp_norm_speech
+            
+            # Extract background music data for processing
+            bg_music_data = db_text.background_music_audio_b64
         
         # Step 5: Process background music
         temp_bg_fd, temp_bg_file = tempfile.mkstemp(suffix='.mp3')
@@ -460,7 +464,7 @@ def export_final_audio(db: Session, text_id: int, output_dir: str = None, bg_vol
         temp_files.append(temp_bg_file)
         
         try:
-            audio_bytes = base64.b64decode(db_text.background_music_audio_b64)
+            audio_bytes = base64.b64decode(bg_music_data)
             with open(temp_bg_file, 'wb') as f:
                 f.write(audio_bytes)
             

@@ -1,0 +1,91 @@
+To receive webhook events, specify a `webhook` URL in the request body when creating a prediction or a training.
+
+Here’s an example using the Replicate client to create a prediction and request a webhook event when the prediction is completed:
+
+astro-island,astro-slot,astro-static-slot{display:contents}(()=>{var e=async t=>{await(await t())()};(self.Astro||(self.Astro={})).load=e;window.dispatchEvent(new Event("astro:load"));})();;(()=>{var A=Object.defineProperty;var g=(i,o,a)=>o in i?A(i,o,{enumerable:!0,configurable:!0,writable:!0,value:a}):i\[o\]=a;var d=(i,o,a)=>g(i,typeof o!="symbol"?o+"":o,a);{let i={0:t=>m(t),1:t=>a(t),2:t=>new RegExp(t),3:t=>new Date(t),4:t=>new Map(a(t)),5:t=>new Set(a(t)),6:t=>BigInt(t),7:t=>new URL(t),8:t=>new Uint8Array(t),9:t=>new Uint16Array(t),10:t=>new Uint32Array(t),11:t=>1/0\*t},o=t=>{let\[l,e\]=t;return l in i?i\[l\](e):void 0},a=t=>t.map(o),m=t=>typeof t!="object"||t===null?t:Object.fromEntries(Object.entries(t).map((\[l,e\])=>\[l,o(e)\]));class y extends HTMLElement{constructor(){super(...arguments);d(this,"Component");d(this,"hydrator");d(this,"hydrate",async()=>{var b;if(!this.hydrator||!this.isConnected)return;let e=(b=this.parentElement)==null?void 0:b.closest("astro-island\[ssr\]");if(e){e.addEventListener("astro:hydrate",this.hydrate,{once:!0});return}let c=this.querySelectorAll("astro-slot"),n={},h=this.querySelectorAll("template\[data-astro-template\]");for(let r of h){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n\[r.getAttribute("data-astro-template")||"default"\]=r.innerHTML,r.remove())}for(let r of c){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n\[r.getAttribute("name")||"default"\]=r.innerHTML)}let p;try{p=this.hasAttribute("props")?m(JSON.parse(this.getAttribute("props"))):{}}catch(r){let s=this.getAttribute("component-url")||"<unknown>",v=this.getAttribute("component-export");throw v&&(s+=\` (export ${v})\`),console.error(\`\[hydrate\] Error parsing props for component ${s}\`,this.getAttribute("props"),r),r}let u;await this.hydrator(this)(this.Component,p,n,{client:this.getAttribute("client")}),this.removeAttribute("ssr"),this.dispatchEvent(new CustomEvent("astro:hydrate"))});d(this,"unmount",()=>{this.isConnected||this.dispatchEvent(new CustomEvent("astro:unmount"))})}disconnectedCallback(){document.removeEventListener("astro:after-swap",this.unmount),document.addEventListener("astro:after-swap",this.unmount,{once:!0})}connectedCallback(){if(!this.hasAttribute("await-children")||document.readyState==="interactive"||document.readyState==="complete")this.childrenConnectedCallback();else{let e=()=>{document.removeEventListener("DOMContentLoaded",e),c.disconnect(),this.childrenConnectedCallback()},c=new MutationObserver(()=>{var n;((n=this.lastChild)==null?void 0:n.nodeType)===Node.COMMENT\_NODE&&this.lastChild.nodeValue==="astro:end"&&(this.lastChild.remove(),e())});c.observe(this,{childList:!0}),document.addEventListener("DOMContentLoaded",e)}}async childrenConnectedCallback(){let e=this.getAttribute("before-hydration-url");e&&await import(e),this.start()}async start(){let e=JSON.parse(this.getAttribute("opts")),c=this.getAttribute("client");if(Astro\[c\]===void 0){window.addEventListener(\`astro:${c}\`,()=>this.start(),{once:!0});return}try{await Astro\[c\](async()=>{let n=this.getAttribute("renderer-url"),\[h,{default:p}\]=await Promise.all(\[import(this.getAttribute("component-url")),n?import(n):()=>()=>{}\]),u=this.getAttribute("component-export")||"default";if(!u.includes("."))this.Component=h\[u\];else{this.Component=h;for(let f of u.split("."))this.Component=this.Component\[f\]}return this.hydrator=p,this.hydrate},e,this)}catch(n){console.error(\`\[astro-island\] Error hydrating ${this.getAttribute("component-url")}\`,n)}}attributeChangedCallback(){this.hydrate()}}d(y,"observedAttributes",\["props"\]),customElements.get("astro-island")||customElements.define("astro-island",y)}})();
+
+JavascriptPython
+
+```js
+await replicate.predictions.create({
+  version: "d55b9f2d...",
+  input: { prompt: "call me later maybe" },
+  webhook: "https://example.com/replicate-webhook",
+  webhook_events_filter: ["completed"], // optional
+});
+```
+
+```python
+import replicate
+prediction = replicate.predictions.create(
+    version="d55b9f2d...",
+    input={"prompt": "call me later maybe"},
+    webhook="https://example.com/replicate-webhook",
+    webhook_events_filter=["completed"],  # optional
+)
+```
+
+[](#webhook-events-filter)Webhook events filter
+-----------------------------------------------
+
+By default, we will send requests to your webhook URL whenever there are new outputs or the prediction has finished. You can change which events trigger webhook requests by specifying `webhook_events_filter` in the prediction request:
+
+*   `start`: immediately on prediction start
+*   `output`: each time a prediction generates an output (note that predictions can generate multiple outputs)
+*   `logs`: each time log output is generated by a prediction
+*   `completed`: when the prediction reaches a terminal state (succeeded/canceled/failed)
+
+For example, if you only wanted requests to be sent at the start and end of the prediction, you would provide:
+
+```json
+{
+  "input": {
+    "text": "Alice"
+  },
+  "webhook": "https://example.com/my-webhook",
+  "webhook_events_filter": ["start", "completed"]
+}
+```
+
+Requests for event types `output` and `logs` will be sent at most once every 500ms.
+
+If you request `start` and `completed` webhooks, then they’ll always be sent regardless of throttling.
+
+[](#webhooks-for-trainings)Webhooks for trainings
+-------------------------------------------------
+
+In addition to predictions, you can also receive webhooks when [fine-tuning models with the training API](/docs/get-started/fine-tune-with-flux):
+
+JavascriptPython
+
+```js
+await replicate.trainings.create({
+  version: "d55b9f2d...",
+  destination: "my-username/my-model",
+  input: { training_data: "..." },
+  webhook: "https://example.com/replicate-webhook",
+});
+```
+
+```python
+import replicate
+training = replicate.trainings.create(
+    version="d55b9f2d...",
+    destination="my-username/my-model",
+    input={"training_data": "..."},
+    webhook="https://example.com/replicate-webhook",
+)
+```
+
+Tip
+
+**Add query params to your webhook URL** to pass along extra metadata, like an internal ID you’re using for a prediction. For example: `https://example.com/replicate-webhook?customId=123`
+
+[](#example-resources)Example resources
+---------------------------------------
+
+*   See the [Node.js client](https://github.com/replicate/replicate-javascript#replicatepredictionscreate) webhook docs.
+*   See the [Python client](https://github.com/replicate/replicate-python#run-a-model-in-the-background-and-get-a-webhook) webhook docs.
+*   See [predictions.create](https://replicate.com/docs/reference/http#predictions.create) and [trainings.create](https://replicate.com/docs/reference/http#trainings.create) API docs.
+*   See [Scribble Diffusion’s codebase](https://github.com/replicate/scribble-diffusion/pull/27/commits/627c872c78aad89cadd02798d37d4696e3278a12) for a reference implementation in JavaScript.
+*   Read our [streaming guide](/docs/streaming) to learn how to consume server-sent events (SSEs) from language models.

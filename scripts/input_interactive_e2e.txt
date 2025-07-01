@@ -1,48 +1,49 @@
-Lena and Amir were best friends—and treasure hunters in training.
+Detective Nia sat at her desk when the phone rang.
 
-One afternoon, they explored the ancient Pyramid of Numbers.
+“Emergency at Sunnydale School,” said the voice. “Thirty cupcakes are missing from the bake sale table!”
 
-At the entrance, they found a glowing sign:
+Nia grabbed her notebook. “I'm on it.”
 
-"To enter, solve the riddle:
-I am a number. Multiply me by 4, you get 28. What am I?"
+She arrived just as the teacher, Mr. J, was counting what was left.
+“We baked 48 cupcakes this morning,” he said, “but now there are only 18.”
 
-Lena whispered, “Let’s try... 4 times what equals 28?”
+Nia jotted in her notebook.
+48 - 18 = ?
+“That means… 30 cupcakes are missing.”
 
-Amir counted on his fingers. “4... 8... 12... 16... 20... 24... 28! That’s seven times!”
+She looked around and spotted crumbs near the lockers.
 
-“So the answer is 7!” Lena called.
+“How many classes had access to the table?” she asked.
 
-The door creaked open.
+“Just three,” Mr. J replied. “Each class had 10 students.”
 
-Inside, a second riddle appeared on a golden wall:
+Nia nodded. “Three classes × 10 students = 30 students. That’s the exact number of missing cupcakes.”
 
-"I hold treasure inside.
-But only those who divide,
-36 by 6, may pass and ride."
+“But would every student take one cupcake?” she wondered aloud.
 
-“That’s easy!” said Amir. “36 divided by 6 is...”
+Then she saw a clue—napkins with bite marks and numbers scribbled on them.
 
-“Let’s check,” Lena said. She drew it in the dust:
-“6, 12, 18, 24, 30, 36 — that’s 6 times. So 36 ÷ 6 = 6!”
+“Look!” said Nia. “One napkin says ‘2’, another says ‘3’. These aren’t random—some kids took more than one!”
 
-The wall slid open, revealing a staircase.
+She thought hard. “What if 10 students took 2 cupcakes each, and 5 students took just 1?”
 
-At the top, one last puzzle glowed on a silver chest:
+(10 × 2) + (5 × 1) = 20 + 5 = 25 cupcakes.
+“Still not enough.”
 
-"Add me up:
-Twelve gold coins,
-Eight silver coins,
-Plus five rubies in a row—
-How many treasures do I show?"
+Then a small voice spoke up. It was Maya from Class 3.
+“I took 3... I was really hungry.”
 
-“Twelve plus eight is twenty,” Lena said.
-“Then add five more... twenty-five!”
+Aha!
 
-Amir grinned. “Let’s open it.”
+Nia recalculated:
+(8 × 2) + (4 × 1) + (2 × 3) = 16 + 4 + 6 = 26
+Still not 30.
 
-They pushed the chest lid—and inside sparkled exactly 25 shining treasures.
+Then Mr. J gasped. “Wait! I ate 4 during lunch!”
 
-Lena laughed. “Math is magic!”
+Nia grinned.
+“26 + 4 = 30! Mystery solved.”
 
-Amir high-fived her. “Next pyramid?”
+Mr. J blushed. “Guess I owe the bake sale another batch.”
+
+“Make it double,” Nia said, “just to be safe.”

@@ -3,15 +3,16 @@ Integration test for sound effects service using real APIs
 """
 import pytest
 import os
-import sys
 import json
 import base64
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
-# Add project root to Python path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Add project root to path for imports
+PROJECT_ROOT = Path(__file__).parent.parent
+import sys
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.logging import SessionLogger
 SessionLogger.start_session(f"test_sound_effects_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
@@ -19,10 +20,10 @@ SessionLogger.start_session(f"test_sound_effects_{datetime.now().strftime('%Y%m%
 from db import models, crud
 from utils.config import settings
 from services.sound_effects import (
-    analyze_text_for_sound_effects,
     generate_and_store_effect,
     delete_existing_sound_effects
 )
+from services.audio_analysis import analyze_text_for_audio
 
 # Skip tests if required API keys are not available
 if not settings.ANTHROPIC_API_KEY or len(settings.ANTHROPIC_API_KEY) < 10:
@@ -52,7 +53,7 @@ class TestSoundEffectsIntegration:
 
     @pytest.mark.integration
     def test_analyze_text_for_sound_effects_real_api(self, db_session, test_text_39, test_output_dir):
-        """Test complete sound effects analysis with real Claude API"""
+        """Test complete sound effects analysis with real Claude API using audio_analysis service"""
         print(f"\n=== Testing Sound Effects Analysis for Text ID {TEST_TEXT_ID} ===")
         print(f"Text content preview: {test_text_39.content[:100]}...")
         
@@ -60,19 +61,66 @@ class TestSoundEffectsIntegration:
         deleted_count = delete_existing_sound_effects(db_session, TEST_TEXT_ID)
         print(f"Cleaned up {deleted_count} existing sound effects using service method")
         
-        # Run sound effects analysis
+        # Run sound effects analysis using the unified audio analysis service
         print("Running Claude API analysis...")
-        effects = analyze_text_for_sound_effects(db_session, TEST_TEXT_ID)
+        _, sound_effects = analyze_text_for_audio(TEST_TEXT_ID)
+        
+        # Store the sound effects in database
+        stored_effects = []
+        for effect in sound_effects:
+            try:
+                start_word_number = effect.get('start_word_number')
+                end_word_number = effect.get('end_word_number')
+                rank = effect.get('rank', 999)
+                
+                # Calculate total_time based on word count
+                total_time = None
+                if start_word_number is not None and end_word_number is not None:
+                    word_count = end_word_number - start_word_number + 1
+                    total_time = max(1, word_count)
+                else:
+                    total_time = 2  # Default 2 seconds
+                
+                stored_effect = crud.create_sound_effect(
+                    db=db_session,
+                    effect_name=effect['effect_name'],
+                    text_id=TEST_TEXT_ID,
+                    start_word=effect['start_word'],
+                    end_word=effect['end_word'],
+                    start_word_position=start_word_number,
+                    end_word_position=end_word_number,
+                    prompt=effect['prompt'],
+                    audio_data_b64="",
+                    start_time=None,
+                    end_time=None,
+                    total_time=total_time,
+                    rank=rank
+                )
+                stored_effects.append(stored_effect)
+                print(f"Stored sound effect '{effect['effect_name']}' in database with word positions: {start_word_number}-{end_word_number}")
+            except Exception as e:
+                print(f"Error storing sound effect '{effect['effect_name']}': {e}")
         
         # Save analysis results
         analysis_output = {
-            "description": "Sound effects analysis results using real Claude API",
+            "description": "Sound effects analysis results using real Claude API via audio_analysis service",
             "text_id": TEST_TEXT_ID,
             "text_content": test_text_39.content,
             "force_alignment_available": test_text_39.word_timestamps is not None,
             "word_timestamps_count": len(test_text_39.word_timestamps) if test_text_39.word_timestamps else 0,
-            "effects_identified": len(effects),
-            "effects": effects,
+            "effects_identified": len(sound_effects),
+            "effects_stored": len(stored_effects),
+            "effects": [
+                {
+                    "effect_name": e.effect_name,
+                    "start_word": e.start_word,
+                    "end_word": e.end_word,
+                    "prompt": e.prompt,
+                    "rank": e.rank,
+                    "total_time": e.total_time
+                }
+                for e in stored_effects
+            ],
             "timestamp": datetime.now().isoformat()
         }
         
@@ -86,17 +134,17 @@ class TestSoundEffectsIntegration:
         with open(output_file, 'w') as f:
             json.dump(analysis_output, f, indent=2)
         
-        print(f"✓ Analysis completed: {len(effects)} effects identified")
+        print(f"✓ Analysis completed: {len(stored_effects)} effects stored")
         print(f"✓ Results saved to: {output_file}")
         
         # Verify effects were stored in database
-        stored_effects = crud.get_sound_effects_by_text(db_session, TEST_TEXT_ID)
-        assert len(stored_effects) == len(effects)
-        print(f"✓ {len(stored_effects)} effects stored in database")
+        db_stored_effects = crud.get_sound_effects_by_text(db_session, TEST_TEXT_ID)
+        assert len(db_stored_effects) == len(stored_effects)
+        print(f"✓ {len(db_stored_effects)} effects stored in database")
         
         # Verify effect structure
-        if stored_effects:
-            effect = stored_effects[0]
+        if db_stored_effects:
+            effect = db_stored_effects[0]
             assert effect.effect_name is not None
             assert effect.start_word is not None
             assert effect.prompt is not None
@@ -104,12 +152,12 @@ class TestSoundEffectsIntegration:
             print(f"✓ Effect structure validated: {effect.effect_name}")
             
             # Display all effects
-            for i, effect in enumerate(stored_effects, 1):
+            for i, effect in enumerate(db_stored_effects, 1):
                 print(f"  {i}. {effect.effect_name}: {effect.start_word} -> {effect.end_word}")
                 print(f"     Timing: {effect.start_time}s - {effect.end_time}s")
                 print(f"     Prompt: {effect.prompt[:60]}...")
         
-        return stored_effects
+        return db_stored_effects
 
     @pytest.mark.integration
     def test_generate_sound_effect_audio_real_api(self, db_session, test_output_dir):
@@ -251,13 +299,13 @@ class TestSoundEffectsIntegration:
         # Step 2: Analysis
         print("Step 2: Running sound effects analysis...")
         try:
-            effects = analyze_text_for_sound_effects(db_session, TEST_TEXT_ID)
+            _, sound_effects = analyze_text_for_audio(TEST_TEXT_ID)
             workflow_results["workflow_steps"].append({
                 "step": "analysis",
                 "status": "completed",
-                "effects_identified": len(effects)
+                "effects_identified": len(sound_effects)
             })
-            print(f"✓ Analysis completed: {len(effects)} effects identified")
+            print(f"✓ Analysis completed: {len(sound_effects)} effects identified")
         except Exception as e:
             workflow_results["workflow_steps"].append({
                 "step": "analysis",
@@ -268,7 +316,7 @@ class TestSoundEffectsIntegration:
             raise
         
         # Step 3: Audio Generation (for first effect only in end-to-end test)
-        if effects:
+        if sound_effects:
             print("Step 3: Generating audio for first sound effect...")
             try:
                 stored_effects = crud.get_sound_effects_by_text(db_session, TEST_TEXT_ID)

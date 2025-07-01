@@ -1,16 +1,20 @@
 import asyncio
 import time
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hume import HumeClient
 from sqlalchemy.orm import Session
 
 from utils.config import settings
 from utils.logging import get_logger
 from utils.http_client import get_async_client
 from db import crud
+from db.session_manager import managed_db_session
 from utils.timing import time_it
+from services.clients import ClientFactory
 
 # Import Hume SDK
-from hume import HumeClient
 from hume.tts import FormatMp3, PostedUtterance, PostedUtteranceVoiceWithId, PostedContextWithUtterances
 
 # Initialize logger
@@ -22,35 +26,36 @@ MAX_RETRIES = 3
 RETRY_DELAY = 5
 
 @time_it("speech_generation")
-async def generate_text_audio(db: Session, text_id: int) -> bool:
+async def generate_text_audio(text_id: int) -> bool:
     """
     Generate audio for all segments of a text with parallel batch processing
     and store individual audio data in the DB.
     
     Args:
-        db: Database session
         text_id: Text ID
         
     Returns:
         True if all segments were processed successfully, False otherwise.
     """
     
-    # Invalidate existing force alignment data before speech generation
-    db_text = crud.get_text(db, text_id)
-    if db_text and db_text.word_timestamps:
-        logger.info(f"Invalidating existing force alignment for text {text_id}")
-        crud.clear_text_word_timestamps(db, text_id)
-        logger.info(f"Cleared existing force alignment data for text {text_id}")
-    
-    # Get voice map for all characters
-    characters = crud.get_characters_by_text(db, text_id)
-    voice_map = {str(char.id): char.provider_id for char in characters if char.provider_id}
-    
-    # Get all segments in their natural order
-    segments = crud.get_segments_by_text(db, text_id)
-    if not segments:
-        logger.warning(f"No segments found for text {text_id}")
-        return False
+    # Use managed database session for initial data access
+    with managed_db_session() as db:
+        # Invalidate existing force alignment data before speech generation
+        db_text = crud.get_text(db, text_id)
+        if db_text and db_text.word_timestamps:
+            logger.info(f"Invalidating existing force alignment for text {text_id}")
+            crud.clear_text_word_timestamps(db, text_id)
+            logger.info(f"Cleared existing force alignment data for text {text_id}")
+        
+        # Get voice map for all characters
+        characters = crud.get_characters_by_text(db, text_id)
+        voice_map = {str(char.id): char.provider_id for char in characters if char.provider_id}
+        
+        # Get all segments in their natural order
+        segments = crud.get_segments_by_text(db, text_id)
+        if not segments:
+            logger.warning(f"No segments found for text {text_id}")
+            return False
     
     # Create logging entry
     log_operation = "parallel_batched_speech_generation"
@@ -60,8 +65,8 @@ async def generate_text_audio(db: Session, text_id: int) -> bool:
     
     # Initialize Hume client once
     try:
-        # Use default Hume client without custom httpx client to avoid async issues
-        hume_client = HumeClient(api_key=settings.HUME_API_KEY)
+        # Use factory to get cached client
+        hume_client = ClientFactory.get_hume_sync_client()
         http_client = None  # Not using custom client
     except Exception as e:
         logger_contextual.error(f"Failed to initialize Hume client: {str(e)}", exc_info=True)
@@ -79,7 +84,6 @@ async def generate_text_audio(db: Session, text_id: int) -> bool:
         
         # Create task for this batch
         task = process_batch(
-            db=db,
             segments=segments,
             batch_segments=batch_segments,
             batch_start=batch_start,
@@ -123,20 +127,18 @@ async def generate_text_audio(db: Session, text_id: int) -> bool:
     return all_segments_processed_successfully
 
 async def process_batch(
-    db: Session,
     segments: List,
     batch_segments: List,
     batch_start: int,
     batch_end: int,
     voice_map: Dict[str, str],
-    hume_client: HumeClient,
+    hume_client: "HumeClient",
     logger_contextual
 ) -> bool:
     """
     Process a single batch of segments with continuation context.
     
     Args:
-        db: Database session
         segments: All segments (for context creation)
         batch_segments: Segments in this batch
         batch_start: Starting index of this batch
@@ -243,7 +245,9 @@ async def process_batch(
                                 logger_contextual.info(f"Processing snippet group {snippet_group_idx} for segment {segment.id}")
                                 
                                 if audio_bytes_b64:
-                                    crud.update_segment_audio_data(db, segment.id, audio_bytes_b64)
+                                    # Use managed database session for audio data update
+                                    with managed_db_session() as db:
+                                        crud.update_segment_audio_data(db, segment.id, audio_bytes_b64)
                                     logger_contextual.info(f"Successfully generated audio for segment {segment.id}")
                                 else:
                                     logger_contextual.error(f"No audio data returned for segment {segment.id}")
@@ -281,12 +285,4 @@ async def process_batch(
     
     return batch_generated_successfully
 
-# Backward compatibility wrapper for synchronous calls
-@time_it("speech_generation_sync")
-def generate_text_audio_sync(db: Session, text_id: int) -> bool:
-    """
-    Synchronous wrapper for generate_text_audio.
-    Maintains backward compatibility with existing synchronous code.
-    """
-    return asyncio.run(generate_text_audio(db, text_id))
         

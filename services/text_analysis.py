@@ -1,4 +1,3 @@
-from anthropic import Anthropic
 import json
 import re
 import os
@@ -8,12 +7,10 @@ from sqlalchemy.sql import func
 from utils.config import settings
 from utils.logging import get_logger
 from db import crud, models
+from db.session_manager import managed_db_session
 from datetime import datetime
 from utils.timing import time_it
-from hume import AsyncHumeClient
-
-# Initialize Anthropic client which will use our patched HTTP transport
-anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+from services.clients import ClientFactory
 
 # Initialize regular logger
 logger = get_logger(__name__)
@@ -21,14 +18,8 @@ logger = get_logger(__name__)
 async def _delete_existing_hume_voices(text_id: int):
     """Delete existing Hume voices for a text_id before reanalysis"""
     try:
-        # Get API key
-        api_key = os.getenv("HUME_API_KEY") or settings.HUME_API_KEY
-        if not api_key:
-            logger.warning("No Hume API key found, skipping voice deletion")
-            return
-            
         # Initialize Hume client
-        hume_client = AsyncHumeClient(api_key=api_key)
+        hume_client = ClientFactory.get_hume_async_client()
         
         # List all custom voices
         voices_response = await hume_client.tts.voices.list(provider="CUSTOM_VOICE")
@@ -181,7 +172,7 @@ def _extract_json_from_response(response_text: str) -> Dict[str, Any]:
             raise ValueError(f"Invalid JSON response: {e}")
 
 @time_it("analyze_text_phase1_characters")
-def analyze_text_phase1_characters(text_content: str) -> List[CharacterDetail]:
+async def analyze_text_phase1_characters(text_content: str) -> List[CharacterDetail]:
     """Phase 1: Identify characters using Claude Haiku."""
     prompt = f"""your job is to put together a list of characters for voiceover, so only speaking characters and narrator (if exist).
 
@@ -211,7 +202,8 @@ Instructions:
 2. IMPORTANT: For FIRST-person narratives, do not create both a "protagonist" and a separate "Narrator" role - they are the same character. use only protagonist.
 3. IMPORTANT: If none of the characters are the narrators - add "Narrator" entry
 4. For each entry describe in one short sentence the voice for voiceover - [AGE GROUP (young adult\\adult\\elder)] [MALE OR FEMALE], American accent, [CORE VOCAL QUALITY + INTENSITY LEVEL] voice, [SPEAKING PATTERN], like [PRECISE CHARACTER ARCHETYPE] [PERFORMING CHARACTERISTIC ACTION WITH EMOTIONAL SUBTEXT]. words like young and youthful should be used only for children characters. don't use the word neutral.
-5. For each entry describe how the character would introduce itself to others in the book, if third person narrator then an introduction to the book
+5. When describing the voice , make sure that there's a differentiation between characters (if there are two young males - one medium pitch, one with lower)
+6. For each entry describe how the character would introduce itself to others in the book, if third person narrator then an introduction to the book
 
 
 Now analyze this text:
@@ -228,7 +220,7 @@ Now analyze this text:
     # Log full Anthropics API request
     logger.info("Anthropic API Request", extra={"anthropic_request": api_params})
     
-    response = anthropic_client.messages.create(**api_params)
+    response = await ClientFactory.get_anthropic_async_client().messages.create(**api_params)
     
     response_content = response.content[0].text
     # Log full Anthropics API response
@@ -255,7 +247,7 @@ Now analyze this text:
     return characters_data
 
 @time_it("analyze_text_phase2_segmentation")
-def analyze_text_phase2_segmentation(text_content: str, characters: List[CharacterDetail]) -> List[NarrativeElement]:
+async def analyze_text_phase2_segmentation(text_content: str, characters: List[CharacterDetail]) -> List[NarrativeElement]:
     """Phase 2: Segment text and add voice instructions using improved approach with internal text structure analysis."""
     
     # Step 1: Use internal text structure analysis to get structured elements
@@ -320,7 +312,7 @@ structured_elements:
     # Log full Anthropics API segmentation request
     logger.info("Anthropic API Segmentation Request", extra={"anthropic_request": api_params})
     
-    response = anthropic_client.messages.create(**api_params)
+    response = await ClientFactory.get_anthropic_async_client().messages.create(**api_params)
     
     response_content = response.content[0].text
     # Log full Anthropics API segmentation response
@@ -330,7 +322,7 @@ structured_elements:
     return analysis.get("narrative_elements", [])
 
 @time_it("get_text_analysis_results")
-def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDetail], List[NarrativeElement]]:
+async def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDetail], List[NarrativeElement]]:
     """
     Orchestrates the two-phase text analysis using Anthropic API calls.
     Returns detailed character info and narrative elements.
@@ -341,7 +333,7 @@ def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDeta
     try:
         # Phase 1: Character Identification
         logger.info(f"Starting character identification for text {text_id} (length: {len(content)})")
-        characters = analyze_text_phase1_characters(content)
+        characters = await analyze_text_phase1_characters(content)
         logger.info(f"Found {len(characters)} characters in text {text_id}")
         
     except Exception as e:
@@ -354,7 +346,7 @@ def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDeta
     # Phase 2: Segmentation
     try:
         logger.info(f"Starting segmentation for text {text_id} with {len(characters)} characters")
-        narrative_elements = analyze_text_phase2_segmentation(content, characters)
+        narrative_elements = await analyze_text_phase2_segmentation(content, characters)
         logger.info(f"Created {len(narrative_elements)} narrative segments for text {text_id}")
         
     except Exception as e:
@@ -364,100 +356,83 @@ def get_analysis_results(text_id: str, content: str) -> Tuple[List[CharacterDeta
     return characters, narrative_elements
 
 @time_it("process_text_analysis")
-async def process_text_analysis(db: Session, text_id: int, content: str) -> models.Text:
+async def process_text_analysis(text_id: int, content: str) -> models.Text:
     """
     Process text analysis using the two-phase approach and save results to database.
     """
     try:
-        characters_data, narrative_elements = get_analysis_results(str(text_id), content)
+        characters_data, narrative_elements = await get_analysis_results(str(text_id), content)
     except Exception as e:
         # Log the failure at this higher level too if needed, or just re-raise
         print(f"Failed to get analysis results for text {text_id}: {e}") 
         raise
 
-    # Get the text from database
-    db_text = crud.get_text(db, text_id)
-    if not db_text:
-        raise ValueError(f"Text with ID {text_id} not found in database")
-    
-    # Delete existing Hume voices and clear database provider_ids before reanalysis
-    await _delete_existing_hume_voices(text_id)
-    _clear_character_voices_in_db(db, text_id)
-    
-    # Delete existing character records and segments from database before creating new ones
-    deleted_segments = crud.delete_segments_by_text(db, text_id)
-    deleted_characters = crud.delete_characters_by_text(db, text_id)
-    print(f"Deleted {deleted_characters} existing characters and {deleted_segments} segments for text {text_id}")
-    
-    db_text.analyzed = True
-    db.commit()
-    db.refresh(db_text)
-
-    # Create characters in DB
-    character_map = {}  # Map character names to DB Character objects
-    db_characters = []
-    for char_detail in characters_data:
-        db_character = crud.create_character(
-            db=db,
-            text_id=db_text.id, 
-            name=char_detail["name"],
-            is_narrator=char_detail.get("is_narrator"),
-            speaking=char_detail.get("speaking"),
-            description=char_detail.get("persona_description"), 
-            intro_text=char_detail.get("intro_text")
-        )
-        character_map[char_detail["name"]] = db_character
-        db_characters.append(db_character)
-    
-    # Create segments in DB
-    db_segments = []
-    for i, element in enumerate(narrative_elements):
-        character_name = element.get("role")
-        db_character = character_map.get(character_name)
+    # Use managed database session for all operations
+    with managed_db_session() as db:
+        # Get the text from database
+        db_text = crud.get_text(db, text_id)
+        if not db_text:
+            raise ValueError(f"Text with ID {text_id} not found in database")
         
-        if db_character:
-            db_segment = crud.create_text_segment(
+        # Delete existing Hume voices and clear database provider_ids before reanalysis
+        await _delete_existing_hume_voices(text_id)
+        _clear_character_voices_in_db(db, text_id)
+        
+        # Delete existing character records and segments from database before creating new ones
+        deleted_segments = crud.delete_segments_by_text(db, text_id)
+        deleted_characters = crud.delete_characters_by_text(db, text_id)
+        print(f"Deleted {deleted_characters} existing characters and {deleted_segments} segments for text {text_id}")
+        
+        db_text.analyzed = True
+        db.refresh(db_text)
+
+        # Create characters in DB
+        character_map = {}  # Map character names to DB Character objects
+        db_characters = []
+        for char_detail in characters_data:
+            db_character = crud.create_character(
                 db=db,
                 text_id=db_text.id, 
-                character_id=db_character.id, 
-                text=element.get("text", ""), 
-                sequence=i + 1, 
-                description=element.get("description"),
-                speed=element.get("speed"),
-                trailing_silence=element.get("trailing_silence")
+                name=char_detail["name"],
+                is_narrator=char_detail.get("is_narrator"),
+                speaking=char_detail.get("speaking"),
+                description=char_detail.get("persona_description"), 
+                intro_text=char_detail.get("intro_text")
             )
-            db_segments.append(db_segment)
-        else:
-            # Log or handle cases where a role in phase 2 doesn't match a character from phase 1
-            warning_message = f"Role '{character_name}' found in segmentation but not in character list for text {text_id}. Skipping segment."
-            print(f"Warning: {warning_message}")
-            segment_logger = get_logger(__name__, {
-                "operation": "segment_creation_warning",
-                "details": f"Role '{character_name}' not found in character map.",
-                "text_id": str(db_text.id)
-            })
-            segment_logger.warning(warning_message)
-    
-    print(f"Processed text {text_id}: Created {len(db_characters)} characters and {len(db_segments)} segments.")
-    
-    return db_text 
-
-# New async versions for parallel processing
-@time_it("async_process_text_analysis")
-async def process_text_analysis_async(db: Session, text_id: int, content: str) -> models.Text:
-    """
-    Async version of process_text_analysis for parallel processing.
-    
-    Args:
-        db: Database session
-        text_id: ID of the text to process
-        content: Text content to analyze
+            character_map[char_detail["name"]] = db_character
+            db_characters.append(db_character)
         
-    Returns:
-        Updated Text model
-    """
-    import asyncio
-    
-    # Run the synchronous function in a thread pool to avoid blocking
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, process_text_analysis, db, text_id, content) 
+        # Create segments in DB
+        db_segments = []
+        for i, element in enumerate(narrative_elements):
+            character_name = element.get("role")
+            db_character = character_map.get(character_name)
+            
+            if db_character:
+                db_segment = crud.create_text_segment(
+                    db=db,
+                    text_id=db_text.id, 
+                    character_id=db_character.id, 
+                    text=element.get("text", ""), 
+                    sequence=i + 1, 
+                    description=element.get("description"),
+                    speed=element.get("speed"),
+                    trailing_silence=element.get("trailing_silence")
+                )
+                db_segments.append(db_segment)
+            else:
+                # Log or handle cases where a role in phase 2 doesn't match a character from phase 1
+                warning_message = f"Role '{character_name}' found in segmentation but not in character list for text {text_id}. Skipping segment."
+                print(f"Warning: {warning_message}")
+                segment_logger = get_logger(__name__, {
+                    "operation": "segment_creation_warning",
+                    "details": f"Role '{character_name}' not found in character map.",
+                    "text_id": str(db_text.id)
+                })
+                segment_logger.warning(warning_message)
+        
+        print(f"Processed text {text_id}: Created {len(db_characters)} characters and {len(db_segments)} segments.")
+        
+        return db_text 
+
+ 

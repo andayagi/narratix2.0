@@ -172,7 +172,7 @@ def test_combine_speech_segments(db_session: Session, test_text_with_segments, s
     logger.info(f"Testing audio combination for text {text.id} with {len(segments)} segments")
     
     # Combine speech segments
-    combined_audio_path = combine_speech_segments(db_session, text.id, output_dir=output_dir)
+    combined_audio_path = await combine_speech_segments(text.id, output_dir=output_dir)
     
     # Verify combined audio was created
     assert combined_audio_path is not None, "Combined audio path should be returned"
@@ -198,7 +198,7 @@ def test_force_alignment_with_combined_audio(db_session: Session, test_text_with
     
     # Get or create combined audio
     if 'combined_audio_path' not in shared_test_data:
-        combined_audio_path = combine_speech_segments(db_session, text.id, output_dir=output_dir)
+        combined_audio_path = await combine_speech_segments(text.id, output_dir=output_dir)
         shared_test_data['combined_audio_path'] = combined_audio_path
     else:
         combined_audio_path = shared_test_data['combined_audio_path']

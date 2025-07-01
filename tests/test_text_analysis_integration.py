@@ -121,7 +121,8 @@ def delete_related_resources(text_id, db):
     return True  # All deletions were successful
 
 @pytest.mark.integration  # Mark as integration test
-def test_full_text_analysis_pipeline():
+@pytest.mark.asyncio
+async def test_full_text_analysis_pipeline():
     """
     Tests the full text analysis pipeline from text input to DB records,
     using the real Anthropic API. Requires ANTHROPIC_API_KEY environment variable.
@@ -178,7 +179,7 @@ def test_full_text_analysis_pipeline():
         # 2. Execute: Run the processing function
         # This will call the real Anthropic API
         try:
-            updated_db_text = process_text_analysis(db=db, text_id=text_id, content=BASE_TEST_TEXT_CONTENT)
+            updated_db_text = await process_text_analysis(db=db, text_id=text_id, content=BASE_TEST_TEXT_CONTENT)
         except ValueError as e:
             # Check if this is a truncation error
             if "truncated" in str(e).lower() or "expecting ',' delimiter" in str(e).lower():

@@ -59,7 +59,7 @@ async def combine_speech_segments_endpoint(
     
     try:
         # Combine speech segments (includes force alignment)
-        combined_audio_path = combine_export_audio.combine_speech_segments(db, text_id)
+        combined_audio_path = await combine_export_audio.combine_speech_segments(text_id)
         
         if not combined_audio_path:
             raise HTTPException(
@@ -126,7 +126,7 @@ async def run_force_alignment(
 
     try:
         # Force alignment is automatically handled in combine_speech_segments
-        combined_audio_path = combine_export_audio.combine_speech_segments(db, text_id)
+        combined_audio_path = await combine_export_audio.combine_speech_segments(text_id)
         success = combined_audio_path is not None
 
         if not success:
@@ -206,8 +206,7 @@ async def export_final_audio_endpoint(
     
     try:
         # Export final audio with all processing
-        audio_file = combine_export_audio.export_final_audio(
-            db=db,
+        audio_file = await combine_export_audio.export_final_audio(
             text_id=text_id,
             bg_volume=bg_volume,
             trailing_silence=trailing_silence,

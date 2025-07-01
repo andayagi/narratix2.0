@@ -104,7 +104,8 @@ def segments(db_session, test_text, test_male_character, test_female_character):
     yield segments
 
 @pytest.mark.integration
-def test_generate_text_audio(db_session, test_text, test_male_character, test_female_character, segments):
+@pytest.mark.asyncio
+async def test_generate_text_audio(db_session, test_text, test_male_character, test_female_character, segments):
     """
     Tests the audio generation pipeline using real Hume AI API calls.
     Uses predefined character voices instead of generating new ones.
@@ -116,7 +117,7 @@ def test_generate_text_audio(db_session, test_text, test_male_character, test_fe
         assert segment.audio_data_b64 is None
     
     # Generate audio using REAL API call
-    success = generate_text_audio(db=db_session, text_id=test_text.id)
+    success = await generate_text_audio(db=db_session, text_id=test_text.id)
     
     # Verify audio was generated successfully
     assert success is True, "Audio generation should return True on success"
@@ -154,7 +155,7 @@ def test_generate_text_audio(db_session, test_text, test_male_character, test_fe
         os.makedirs(output_dir)
 
     # Use the combine_speech_segments function to export the audio
-    exported_audio_path = combine_speech_segments(db=db_session, text_id=test_text.id, output_dir=output_dir)
+    exported_audio_path = await combine_speech_segments(text_id=test_text.id, output_dir=output_dir)
 
     # Verify that the audio file was created
     assert exported_audio_path is not None, "combine_speech_segments should return the path of the exported file"

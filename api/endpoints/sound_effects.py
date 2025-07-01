@@ -13,24 +13,6 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.post("/analyze/{text_id}", status_code=202)
-async def analyze_sound_effects(text_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """
-    Analyzes a text for sound effect opportunities and stores them in the database.
-    This is a long-running background task.
-    """
-    db_text = crud.get_text(db, text_id)
-    if not db_text:
-        raise HTTPException(status_code=404, detail="Text not found")
-        
-    # Sound effects analysis only requires the text content and word positions
-    # No need for speech generation or force alignment at this stage
-    
-    # Run the analysis in the background
-    background_tasks.add_task(sfx_service.analyze_text_for_sound_effects, db, text_id)
-    
-    return {"message": "Sound effect analysis has been initiated in the background."}
-
 @router.get("/{text_id}", response_model=List[SoundEffect])
 async def get_sound_effects_for_text(text_id: int, db: Session = Depends(get_db)):
     """Get all sound effects for a given text."""
@@ -44,6 +26,7 @@ async def generate_sound_effects_for_text(text_id: int, background_tasks: Backgr
     """
     Generates audio for all sound effects of a text IN PARALLEL.
     This is a long-running background task.
+    Requires that sound effects already exist in the database with prompts.
     
     Args:
         text_id: ID of the text to generate sound effects for
@@ -56,7 +39,7 @@ async def generate_sound_effects_for_text(text_id: int, background_tasks: Backgr
     # Get all sound effects for this text
     sound_effects = crud.get_sound_effects_by_text(db, text_id)
     if not sound_effects:
-        raise HTTPException(status_code=404, detail="No sound effects found for this text")
+        raise HTTPException(status_code=404, detail="No sound effects found for this text. Run audio analysis first.")
     
     # Check if any effects need generation
     if force:
@@ -73,7 +56,7 @@ async def generate_sound_effects_for_text(text_id: int, background_tasks: Backgr
     
     if effects_needing_generation:
         # Use parallel generation for all effects at once
-        background_tasks.add_task(sfx_service.generate_and_store_all_effects_parallel, db, text_id)
+        background_tasks.add_task(sfx_service.generate_sound_effects_for_text_parallel, text_id)
         return {"message": f"PARALLEL audio generation for {len(effects_needing_generation)} sound effects has been initiated in the background{message_suffix}."}
     else:
         return {"message": f"All {len(sound_effects)} sound effects already have generated audio."}
@@ -88,11 +71,11 @@ async def generate_single_sound_effect(effect_id: int, background_tasks: Backgro
     if not db_effect:
         raise HTTPException(status_code=404, detail="Sound effect not found")
 
-    # Sound effect generation only requires the effect prompt and duration
-    # Word positions are converted to timestamps during final export, not here
+    if not db_effect.prompt:
+        raise HTTPException(status_code=400, detail="Sound effect has no prompt. Run audio analysis first.")
     
     # Generate the sound effect audio
-    background_tasks.add_task(sfx_service.generate_and_store_effect, db, effect_id)
+    background_tasks.add_task(sfx_service.generate_and_store_effect, effect_id)
     
     return {"message": f"Audio generation for effect {effect_id} has been initiated."}
 

@@ -24,7 +24,7 @@ def main():
     
     db = SessionLocal()
     try:
-        result = export_final_audio(db, args.text_id, args.output_dir, args.bg_volume)
+        result = await export_final_audio(args.text_id, args.output_dir, args.bg_volume)
         if result:
             print(f"Successfully exported final audio: {result}")
             return 0

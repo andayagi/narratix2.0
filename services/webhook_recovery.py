@@ -5,17 +5,17 @@ Detects missing audio files and manually processes completed Replicate predictio
 when webhooks fail to deliver.
 """
 
-import replicate
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from db import crud
 from db.database import SessionLocal
 from services.replicate_audio import process_webhook_result
 from utils.logging import get_logger
+from services.clients import ClientFactory
 
 logger = get_logger(__name__)
 
-def check_and_recover_missing_audio(text_id: int) -> Dict[str, Any]:
+async def check_and_recover_missing_audio(text_id: int) -> Dict[str, Any]:
     """
     Check for missing audio files and attempt to recover them by manually
     processing completed Replicate predictions.
@@ -42,7 +42,7 @@ def check_and_recover_missing_audio(text_id: int) -> Dict[str, Any]:
         text = crud.get_text(db, text_id)
         if text and text.background_music_prompt and not text.background_music_audio_b64:
             logger.info(f"Background music missing for text {text_id}, attempting recovery...")
-            bg_recovered = recover_background_music(text_id)
+            bg_recovered = await recover_background_music(text_id)
             recovery_results["background_music_recovered"] = bg_recovered
             if bg_recovered:
                 logger.info(f"✅ Successfully recovered background music for text {text_id}")
@@ -56,7 +56,7 @@ def check_and_recover_missing_audio(text_id: int) -> Dict[str, Any]:
         for effect in sound_effects:
             if not effect.audio_data_b64:
                 logger.info(f"Sound effect '{effect.effect_name}' (ID: {effect.id}) missing audio, attempting recovery...")
-                sfx_recovered = recover_sound_effect(effect.id)
+                sfx_recovered = await recover_sound_effect(effect.id)
                 if sfx_recovered:
                     recovery_results["sound_effects_recovered"] += 1
                     logger.info(f"✅ Successfully recovered sound effect '{effect.effect_name}'")
@@ -73,7 +73,7 @@ def check_and_recover_missing_audio(text_id: int) -> Dict[str, Any]:
     finally:
         db.close()
 
-def recover_background_music(text_id: int) -> bool:
+async def recover_background_music(text_id: int) -> bool:
     """
     Attempt to recover background music by finding and processing the Replicate prediction.
     
@@ -85,7 +85,7 @@ def recover_background_music(text_id: int) -> bool:
     """
     try:
         # Get recent predictions that might match
-        predictions = replicate.predictions.list()
+        predictions = ClientFactory.get_replicate_client().predictions.list()
         
         for prediction in predictions:
             # Check if this looks like a background music prediction for our text
@@ -105,7 +105,7 @@ def recover_background_music(text_id: int) -> bool:
                         "output": prediction.output
                     }
                     
-                    success = process_webhook_result("background_music", text_id, mock_payload)
+                    success = await process_webhook_result("background_music", text_id, mock_payload)
                     if success:
                         logger.info(f"Successfully recovered background music using prediction {prediction.id}")
                         return True
@@ -120,7 +120,7 @@ def recover_background_music(text_id: int) -> bool:
         logger.error(f"Error recovering background music for text {text_id}: {e}")
         return False
 
-def recover_sound_effect(effect_id: int) -> bool:
+async def recover_sound_effect(effect_id: int) -> bool:
     """
     Attempt to recover sound effect by finding and processing the Replicate prediction.
     
@@ -132,7 +132,7 @@ def recover_sound_effect(effect_id: int) -> bool:
     """
     try:
         # Get recent predictions that might match
-        predictions = replicate.predictions.list()
+        predictions = ClientFactory.get_replicate_client().predictions.list()
         
         for prediction in predictions:
             # Check if this looks like a sound effect prediction
@@ -152,7 +152,7 @@ def recover_sound_effect(effect_id: int) -> bool:
                         "output": prediction.output
                     }
                     
-                    success = process_webhook_result("sound_effect", effect_id, mock_payload)
+                    success = await process_webhook_result("sound_effect", effect_id, mock_payload)
                     if success:
                         logger.info(f"Successfully recovered sound effect using prediction {prediction.id}")
                         return True
@@ -167,7 +167,7 @@ def recover_sound_effect(effect_id: int) -> bool:
         logger.error(f"Error recovering sound effect {effect_id}: {e}")
         return False
 
-def manual_webhook_recovery(text_id: int, prediction_ids: Dict[str, str]) -> Dict[str, bool]:
+async def manual_webhook_recovery(text_id: int, prediction_ids: Dict[str, str]) -> Dict[str, bool]:
     """
     Manually recover webhooks using known prediction IDs.
     
@@ -183,7 +183,7 @@ def manual_webhook_recovery(text_id: int, prediction_ids: Dict[str, str]) -> Dic
     # Recover background music
     if "background_music" in prediction_ids:
         try:
-            prediction = replicate.predictions.get(prediction_ids["background_music"])
+            prediction = ClientFactory.get_replicate_client().predictions.get(prediction_ids["background_music"])
             if prediction.status == "succeeded" and prediction.output:
                 mock_payload = {
                     "id": prediction.id,
@@ -194,7 +194,7 @@ def manual_webhook_recovery(text_id: int, prediction_ids: Dict[str, str]) -> Dic
                     "output": prediction.output
                 }
                 
-                success = process_webhook_result("background_music", text_id, mock_payload)
+                success = await process_webhook_result("background_music", text_id, mock_payload)
                 results["background_music"] = success
                 logger.info(f"Manual recovery of background music: {'✅ Success' if success else '❌ Failed'}")
             else:
@@ -207,7 +207,7 @@ def manual_webhook_recovery(text_id: int, prediction_ids: Dict[str, str]) -> Dic
     # Recover sound effects
     if "sound_effect" in prediction_ids:
         try:
-            prediction = replicate.predictions.get(prediction_ids["sound_effect"])
+            prediction = ClientFactory.get_replicate_client().predictions.get(prediction_ids["sound_effect"])
             if prediction.status == "succeeded" and prediction.output:
                 # Get the first sound effect for this text
                 db = SessionLocal()
@@ -225,7 +225,7 @@ def manual_webhook_recovery(text_id: int, prediction_ids: Dict[str, str]) -> Dic
                             "output": prediction.output
                         }
                         
-                        success = process_webhook_result("sound_effect", effect_id, mock_payload)
+                        success = await process_webhook_result("sound_effect", effect_id, mock_payload)
                         results["sound_effect"] = success
                         logger.info(f"Manual recovery of sound effect: {'✅ Success' if success else '❌ Failed'}")
                     else:

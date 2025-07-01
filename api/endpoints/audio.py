@@ -29,8 +29,8 @@ async def generate_audio_for_text(
     if not db_text.analyzed:
         raise HTTPException(status_code=400, detail="Text must be analyzed before generating audio")
     
-    # Generate audio - now returns True/False instead of file paths
-    success = speech_generation.generate_text_audio(db, text_id)
+    # Generate audio with parallel batch processing - now returns True/False instead of file paths
+    success = await speech_generation.generate_text_audio(db, text_id)
     
     # Return the generation status
     return {
@@ -52,8 +52,8 @@ async def generate_segments_audio(
     if not db_text.analyzed:
         raise HTTPException(status_code=400, detail="Text must be analyzed before generating audio")
     
-    # Generate audio - now returns True/False instead of file paths
-    success = speech_generation.generate_text_audio(db, text_id)
+    # Generate audio with parallel batch processing - now returns True/False instead of file paths
+    success = await speech_generation.generate_text_audio(db, text_id)
     
     # Return the generation status
     return {
@@ -82,17 +82,32 @@ async def generate_background_music(
         raise HTTPException(status_code=404, detail="Text not found")
     
     # Process background music (both prompt and music generation)
-    success, prompt, music_file = background_music.process_background_music_for_text(db, text_id)
-    
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to generate background music")
-    
-    return {
-        "text_id": text_id,
-        "prompt": prompt,
-        "music_file": music_file,
-        "warning": "⚠️ This endpoint is deprecated. Use /api/background-music/{text_id}/process instead."
-    }
+    try:
+        # Step 1: Generate prompt using audio analysis
+        from services.audio_analysis import analyze_text_for_audio
+        soundscape, _ = analyze_text_for_audio(text_id)
+        
+        if not soundscape:
+            raise HTTPException(status_code=500, detail="Failed to generate background music prompt")
+        
+        # Store the prompt
+        background_music.update_text_with_music_prompt(text_id, soundscape)
+        
+        # Step 2: Generate audio
+        success = await background_music.generate_background_music(text_id)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to generate background music audio")
+        
+        return {
+            "text_id": text_id,
+            "prompt": soundscape,
+            "music_file": "Generated via webhook (check database)",
+            "warning": "⚠️ This endpoint is deprecated. Use /api/background-music/{text_id}/process instead."
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate background music: {str(e)}")
 
 @router.get("/text/{text_id}/background-music", response_model=Dict[str, Any])
 async def get_background_music_status(
@@ -173,7 +188,7 @@ async def export_final_audio(
         raise HTTPException(status_code=400, detail="No segments have audio generated. Generate audio first.")
     
     # Export final audio
-    audio_file = combine_export_audio.export_final_audio(db, text_id)
+    audio_file = await combine_export_audio.export_final_audio(text_id)
     
     if not audio_file:
         raise HTTPException(status_code=500, detail="Failed to export final audio")
@@ -291,7 +306,7 @@ async def run_force_alignment_for_text(
 
     # Force alignment is now handled automatically in combine_speech_segments
     # Just trigger the combine process which will run force alignment
-    combined_audio_path = combine_export_audio.combine_speech_segments(db, text_id)
+    combined_audio_path = await combine_export_audio.combine_speech_segments(text_id)
     success = combined_audio_path is not None
 
     if not success:

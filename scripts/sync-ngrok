@@ -1,0 +1,5 @@
+#!/bin/bash
+# Simple wrapper to sync BASE_URL with current ngrok tunnel
+
+cd "$(dirname "$0")/.."
+python3 scripts/update_ngrok_url.py "$@" 
