@@ -13,7 +13,9 @@ restartPolicyMaxRetries = 3
 variables = { 
   ENVIRONMENT = "production",
   DB_ECHO = "false",
-  WEBHOOK_MONITORING_ENABLED = "true"
+  WEBHOOK_MONITORING_ENABLED = "true",
+  BASE_URL = "https://api.midsummerr.com",
+  CORS_ORIGINS = "https://midsummerr.com,https://www.midsummerr.com"
 }
 
 [environments.staging]

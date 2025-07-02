@@ -7,24 +7,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./db/narratix.db") # Default to SQLite in db/ directory
+# Import settings for centralized configuration
+from utils.config import settings
 
-# Check if the URL is for SQLite and adjust if it's a relative path
-if DATABASE_URL.startswith("sqlite:///") and not DATABASE_URL.startswith("sqlite:////"):
-    # Construct absolute path for relative SQLite DBs
-    # Assumes the db file is relative to the project root where .env might be
-    # Adjust this logic if your db file location is different
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # Go up two levels from db/database.py
-    db_path = os.path.join(project_root, DATABASE_URL[len("sqlite:///"):])
-    DATABASE_URL = f"sqlite:///{db_path}"
+DATABASE_URL = settings.DATABASE_URL
 
-# Database connection pooling configuration
-DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "25"))  # Base pool size
-DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "35"))  # Additional connections beyond pool_size
-DB_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))  # Timeout to get connection from pool
-DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))  # Recycle connections after 1 hour
-DB_POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"  # Verify connections before use
-DB_ECHO = os.getenv("DB_ECHO", "false").lower() == "true"  # Log SQL statements for debugging
+# Database connection pooling configuration (now from settings)
+DB_POOL_SIZE = settings.DB_POOL_SIZE
+DB_MAX_OVERFLOW = settings.DB_MAX_OVERFLOW
+DB_POOL_TIMEOUT = settings.DB_POOL_TIMEOUT
+DB_POOL_RECYCLE = settings.DB_POOL_RECYCLE
+DB_POOL_PRE_PING = settings.DB_POOL_PRE_PING
+DB_ECHO = settings.DB_ECHO
 
 # Enhanced database configuration for parallel processing
 if DATABASE_URL.startswith("sqlite"):
@@ -69,10 +63,11 @@ else:
         pool_pre_ping=DB_POOL_PRE_PING, # Verify connection health before use
         pool_recycle=DB_POOL_RECYCLE,   # Refresh connections periodically
         echo=DB_ECHO,               # Log SQL statements if enabled
-        # Additional PostgreSQL optimizations
+        # Additional PostgreSQL optimizations  
+        # Note: Neon connection pooler doesn't support statement_timeout parameter
         connect_args={
             "options": "-c statement_timeout=300000"  # 5 minute statement timeout
-        } if "postgresql" in DATABASE_URL else {}
+        } if "postgresql" in DATABASE_URL and "neon.tech" not in DATABASE_URL else {}
     )
 
 # Create session factory with optimized settings
@@ -111,7 +106,7 @@ def get_connection_pool_status():
         "checked_in_connections": pool.checkedin(),
         "checked_out_connections": pool.checkedout(),
         "overflow_connections": pool.overflow(),
-        "invalid_connections": pool.invalid(),
+        "invalid_connections": getattr(pool, 'invalid', lambda: 0)(),  # Some pool types don't have invalid()
         "total_connections": pool.size() + pool.overflow(),
     }
     

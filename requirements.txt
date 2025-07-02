@@ -4,8 +4,10 @@ sqlalchemy==2.0.38
 alembic==1.13.1
 pydantic==2.11.0
 python-dotenv==1.0.1
+psycopg2-binary==2.9.10
 anthropic==0.21.0
 httpx==0.27.0
+aiohttp==3.10.10
 python-multipart==0.0.9
 uuid==1.30
 pytest==7.4.3
@@ -13,6 +15,7 @@ pytest-asyncio
 pydantic-settings
 hume==0.8.4
 replicate==1.0.7
+boto3==1.34.0
 
 # AudioX integration for sound effects
 gradio_client>=0.18.0

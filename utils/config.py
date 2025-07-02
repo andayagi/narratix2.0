@@ -91,10 +91,26 @@ class Settings:
         
         # Replicate Audio Configuration
         self.replicate_audio = ReplicateAudioSettings.from_environment()
+        
+        # Database Configuration Management
+        self.DATABASE_URL = self._get_database_url()
+        
+        # Database connection pooling configuration (moved from database.py)
+        self.DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "25"))
+        self.DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "35"))
+        self.DB_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+        self.DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
+        self.DB_POOL_PRE_PING = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"
+        self.DB_ECHO = os.getenv("DB_ECHO", "false").lower() == "true"
     
     def _get_base_url(self) -> str:
         """Get BASE_URL with proper HTTPS validation for production."""
         base_url = os.getenv("BASE_URL", "http://localhost:8000")
+        
+        # Use API subdomain as default for production if no BASE_URL specified
+        if self.ENVIRONMENT == "production" and base_url == "http://localhost:8000":
+            base_url = "https://api.midsummerr.com"
+            logger.info(f"Using default production API domain: {base_url}")
         
         # Ensure HTTPS in production
         if self.ENVIRONMENT == "production":
@@ -120,8 +136,13 @@ class Settings:
                 logger.info(f"Production CORS origins: {origins}")
                 return origins
             else:
-                logger.warning("No CORS_ORIGINS specified for production environment")
-                return []
+                # Default production CORS origins for frontend domains
+                default_origins = [
+                    "https://midsummerr.com",
+                    "https://www.midsummerr.com"
+                ]
+                logger.info(f"Using default production CORS origins: {default_origins}")
+                return default_origins
         else:
             # Allow all origins in development
             return ["*"]
@@ -165,6 +186,39 @@ class Settings:
             raise ValueError(f"Webhook URL must use HTTPS in production: {url}")
         
         return url
+
+    def _get_database_url(self) -> str:
+        """Get DATABASE_URL based on environment with proper fallbacks."""
+        
+        # Check for environment-specific DATABASE_URL first
+        if self.ENVIRONMENT == "production":
+            # Production: prefer NEON_DATABASE_URL, fallback to DATABASE_URL
+            database_url = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
+            if not database_url:
+                raise ValueError("Production environment requires NEON_DATABASE_URL or DATABASE_URL")
+        elif self.ENVIRONMENT == "development":
+            # Development: prefer LOCAL_DATABASE_URL, fallback to DATABASE_URL
+            database_url = os.getenv("LOCAL_DATABASE_URL") or os.getenv("DATABASE_URL")
+            if not database_url:
+                # Default to SQLite for development
+                database_url = "sqlite:///./db/narratix.db"
+                logger.info("Using default SQLite database for development")
+        else:
+            # Fallback for any other environment
+            database_url = os.getenv("DATABASE_URL", "sqlite:///./db/narratix.db")
+        
+        # Adjust SQLite path if relative
+        if database_url.startswith("sqlite:///") and not database_url.startswith("sqlite:////"):
+            project_root = str(self.PROJECT_ROOT)
+            db_path = os.path.join(project_root, database_url[len("sqlite:///"):])
+            database_url = f"sqlite:///{db_path}"
+        
+        logger.info(f"Using database: {database_url.split('@')[-1] if '@' in database_url else database_url}")
+        return database_url
+    
+    def is_using_neon(self) -> bool:
+        """Check if currently using Neon PostgreSQL database."""
+        return "neon.tech" in self.DATABASE_URL
 
 # Create a singleton settings instance
 settings = Settings()
