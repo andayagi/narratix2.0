@@ -87,6 +87,13 @@ def generate_and_store_effect(effect_id: int) -> bool:
             }
         )
         
+        # Clear existing audio data to ensure we wait for new prediction
+        with managed_db_session() as db:
+            effect = crud.get_sound_effect(db, effect_id)
+            if effect and effect.audio_data_b64:
+                crud.update_sound_effect_audio(db, effect_id, None)
+                logger.info(f"Cleared existing audio data for sound effect {effect_id} to wait for new prediction")
+        
         # Trigger webhook-based generation
         prediction_id = create_webhook_prediction("sound_effect", effect_id, config)
         if prediction_id:
@@ -210,6 +217,7 @@ async def generate_sound_effects_for_text_parallel(text_id: int) -> bool:
             
             # Extract effect IDs and names while session is active (to avoid detached session issues)
             effect_data = [(effect.effect_id, effect.effect_name) for effect in effects]
+            logger.info(f"Effect data extracted: {effect_data}")
         
         def generate_single_effect(effect_id: int) -> bool:
             """Worker function to generate a single effect"""

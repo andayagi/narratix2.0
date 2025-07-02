@@ -10,7 +10,15 @@ restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
 [environments.production]
-variables = { ENVIRONMENT = "production" }
+variables = { 
+  ENVIRONMENT = "production",
+  DB_ECHO = "false",
+  WEBHOOK_MONITORING_ENABLED = "true"
+}
 
 [environments.staging]
-variables = { ENVIRONMENT = "staging" } 
+variables = { 
+  ENVIRONMENT = "staging",
+  DB_ECHO = "true",
+  WEBHOOK_MONITORING_ENABLED = "true"
+} 

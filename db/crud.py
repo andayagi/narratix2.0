@@ -30,7 +30,7 @@ def update_text_analyzed(db: Session, text_id: int, analyzed: bool) -> Optional[
 
 def update_text_background_music_audio(db: Session, text_id: int, audio_data_b64: str) -> Optional[models.Text]:
     """
-    Update the background_music_audio_b64 field for a text.
+    Update the background_music_audio_b64 field for a text and set bg_audio_timestamp.
     
     Args:
         db: Database session
@@ -43,6 +43,7 @@ def update_text_background_music_audio(db: Session, text_id: int, audio_data_b64
     db_text = get_text(db, text_id)
     if db_text:
         db_text.background_music_audio_b64 = audio_data_b64
+        db_text.bg_audio_timestamp = datetime.utcnow()
         db.commit()
         db.refresh(db_text)
     return db_text
@@ -339,6 +340,7 @@ def update_sound_effect_audio(
     db_sound_effect = get_sound_effect(db, effect_id)
     if db_sound_effect:
         db_sound_effect.audio_data_b64 = audio_data_b64
+        db_sound_effect.audio_timestamp = datetime.utcnow()  # Set timestamp when audio is updated
         if start_time is not None:
             db_sound_effect.start_time = start_time
         if end_time is not None:

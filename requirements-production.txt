@@ -1,0 +1,20 @@
+fastapi==0.115.0
+uvicorn==0.30.0
+sqlalchemy==2.0.38
+alembic==1.13.1
+pydantic==2.11.0
+python-dotenv==1.0.1
+anthropic==0.21.0
+httpx==0.27.0
+python-multipart==0.0.9
+pytest==7.4.3
+pytest-asyncio
+pydantic-settings
+hume==0.8.4
+replicate==1.0.7
+
+# AudioX integration for sound effects
+gradio_client>=0.18.0
+
+# Database drivers for PostgreSQL
+psycopg2-binary>=2.9.0

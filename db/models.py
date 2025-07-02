@@ -16,6 +16,7 @@ class Text(Base):
     analyzed = Column(Boolean, default=False, nullable=False)
     background_music_prompt = Column(SQLAlchemyText, nullable=True)
     background_music_audio_b64 = Column(SQLAlchemyText, nullable=True)
+    bg_audio_timestamp = Column(DateTime(timezone=True), nullable=True)  # When background music audio was last created
     word_timestamps = Column(JSON, nullable=True)  # Store complete word-level timing data
     force_alignment_timestamp = Column(DateTime(timezone=True), nullable=True)  # When force alignment was last performed
     
@@ -79,12 +80,13 @@ class SoundEffect(Base):
     start_word_position = Column(Integer, nullable=True)  # Position of start word in text
     end_word_position = Column(Integer, nullable=True)    # Position of end word in text
     prompt = Column(SQLAlchemyText, nullable=False)
-    audio_data_b64 = Column(SQLAlchemyText, nullable=False)
+    audio_data_b64 = Column(SQLAlchemyText, nullable=True)
     start_time = Column(Float, nullable=True)  # From force alignment
     end_time = Column(Float, nullable=True)    # From force alignment
     total_time = Column(Integer, nullable=True)  # Calculated total time in seconds (rounded, min 1)
     rank = Column(Integer, nullable=True)  # Importance ranking from Claude analysis (1 = most important)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    audio_timestamp = Column(DateTime(timezone=True), nullable=True)  # When audio was last created
     
     # Relationships
     text = relationship("Text", back_populates="sound_effects")

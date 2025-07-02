@@ -138,6 +138,12 @@ async def generate_background_music(text_id: int) -> bool:
                               "calculated_duration": total_duration,
                               "final_music_duration": music_duration})
             
+            # Clear existing background music audio data to ensure we wait for new prediction
+            if db_text.background_music_audio_b64:
+                db_text.background_music_audio_b64 = None
+                db.commit()
+                logger.info(f"Cleared existing background music audio for text {text_id} to wait for new prediction")
+            
             # Create ReplicateAudioConfig with background music parameters
             config = ReplicateAudioConfig(
                 version="96af46316252ddea4c6614e31861876183b59dce84bad765f38424e87919dd85",

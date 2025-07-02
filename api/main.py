@@ -124,7 +124,66 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Basic health check endpoint"""
+    return {"status": "healthy", "service": "narratix-api", "version": "2.0.0"}
+
+@app.get("/health/detailed")
+async def detailed_health_check():
+    """Detailed health check with service dependencies"""
+    health_status = {
+        "status": "healthy",
+        "service": "narratix-api", 
+        "version": "2.0.0",
+        "environment": settings.ENVIRONMENT,
+        "timestamp": datetime.now().isoformat(),
+        "checks": {}
+    }
+    
+    # Check database connection
+    try:
+        from db.database import get_db
+        db = next(get_db())
+        # Simple query to test connection
+        db.execute("SELECT 1")
+        health_status["checks"]["database"] = {"status": "healthy"}
+    except Exception as e:
+        health_status["checks"]["database"] = {"status": "unhealthy", "error": str(e)}
+        health_status["status"] = "unhealthy"
+    
+    # Check API keys presence
+    api_keys_status = {
+        "anthropic": bool(settings.ANTHROPIC_API_KEY),
+        "hume": bool(settings.HUME_API_KEY), 
+        "replicate": bool(settings.REPLICATE_API_TOKEN)
+    }
+    
+    if all(api_keys_status.values()):
+        health_status["checks"]["api_keys"] = {"status": "healthy"}
+    else:
+        health_status["checks"]["api_keys"] = {
+            "status": "unhealthy", 
+            "missing_keys": [k for k, v in api_keys_status.items() if not v]
+        }
+        health_status["status"] = "unhealthy"
+    
+    return health_status
+
+@app.get("/health/ready")
+async def readiness_check():
+    """Kubernetes-style readiness probe"""
+    try:
+        # Quick checks for service readiness
+        from db.database import get_db
+        db = next(get_db())
+        db.execute("SELECT 1")
+        
+        # Check critical environment variables
+        if not all([settings.ANTHROPIC_API_KEY, settings.HUME_API_KEY, settings.REPLICATE_API_TOKEN]):
+            return {"status": "not_ready", "reason": "missing_api_keys"}, 503
+            
+        return {"status": "ready"}
+    except Exception as e:
+        return {"status": "not_ready", "reason": str(e)}, 503
 
 @app.get("/webhook-status")
 async def webhook_status():

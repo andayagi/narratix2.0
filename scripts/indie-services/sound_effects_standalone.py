@@ -15,6 +15,7 @@ sys.path.insert(0, str(project_root))
 
 from services.sound_effects import generate_sound_effects_for_text_parallel
 from utils.logging import get_logger
+from utils.ngrok_sync import smart_server_health_check, sync_ngrok_url
 
 logger = get_logger(__name__)
 
@@ -34,17 +35,35 @@ async def main():
     text_id = args.text_id
     logger.info(f"Starting sound effects generation for text ID {text_id}")
     
+    # Check server health and sync ngrok URL if needed
+    logger.info("Checking server health and ngrok sync...")
+    if not smart_server_health_check():
+        logger.error("❌ Server health check failed. Please ensure:")
+        logger.error("   1. Local server is running: uvicorn api.main:app --reload")
+        logger.error("   2. ngrok is running: ngrok http 8000")
+        return False
+    
+    logger.info("✅ Server is healthy and reachable")
+    
     try:
         success = await generate_sound_effects_for_text_parallel(text_id)
         if success:
             logger.info("✅ Sound effects generation completed successfully!")
-            sys.exit(0)
+            return True
         else:
             logger.error("❌ Sound effects generation failed")
-            sys.exit(1)
+            return False
     except Exception as e:
         logger.error(f"❌ Unexpected error: {e}")
-        sys.exit(1)
+        return False
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    try:
+        result = asyncio.run(main())
+        sys.exit(0 if result else 1)
+    except KeyboardInterrupt:
+        logger.info("Script interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Script failed: {e}")
+        sys.exit(1) 

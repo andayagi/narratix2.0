@@ -223,34 +223,26 @@ def create_webhook_prediction(content_type: str, content_id: int, config: Replic
 async def process_webhook_result(content_type: str, content_id: int, prediction_data: Dict[str, Any], 
                                notifier: Optional[WebhookCompletionNotifier] = None) -> bool:
     """
-    Process webhook result using appropriate processor with dependency injection.
+    Process webhook result using appropriate processor.
     
     Args:
         content_type: "sound_effect" or "background_music"
         content_id: effect_id or text_id respectively
         prediction_data: Webhook payload with prediction data
-        notifier: Optional webhook notifier instance (uses global if None)
+        notifier: Optional webhook notifier instance (DEPRECATED - using DB polling)
         
     Returns:
         True if processing succeeded, False otherwise
     """
-    if notifier is None:
-        notifier = WebhookNotifierFactory.get_global_notifier()
-        
     try:
         # Use managed session for processing
         with managed_db_session() as db:
             processor = get_processor(content_type)
             success = await processor.process_and_store(db, content_id, prediction_data)
-            
-            # Notify completion for event-driven waiting (now properly awaited)
-            await notifier.notify_completion(content_type, content_id, success)
-            
             return success
             
     except Exception as e:
         logger.error(f"Error processing webhook result for {content_type} {content_id}: {e}")
-        await notifier.notify_completion(content_type, content_id, False)
         return False
 
 def get_processor(content_type: str) -> 'AudioPostProcessor':
@@ -415,6 +407,7 @@ class SoundEffectProcessor(AudioPostProcessor):
     async def store_audio(self, db: Session, content_id: int, audio_b64: str) -> bool:
         """Store sound effect audio in database using injected session."""
         try:
+            # First attempt with the existing safe_execute method
             result = DatabaseSessionManager.safe_execute(
                 db, 
                 f"update_sound_effect_audio_{content_id}",
@@ -427,8 +420,23 @@ class SoundEffectProcessor(AudioPostProcessor):
                 logger.info(f"Successfully stored audio for sound effect {content_id}")
                 return True
             else:
-                logger.error(f"Failed to update sound effect {content_id} in database")
-                return False
+                # If safe_execute failed silently, try direct update with explicit timestamp
+                logger.warning(f"safe_execute failed for sound effect {content_id}, attempting direct update")
+                from datetime import datetime
+                
+                # Get the sound effect
+                effect = crud.get_sound_effect(db, content_id)
+                if effect:
+                    # Update fields directly
+                    effect.audio_data_b64 = audio_b64
+                    effect.audio_timestamp = datetime.utcnow()
+                    db.commit()
+                    db.refresh(effect)
+                    logger.info(f"Successfully updated sound effect {content_id} with direct method and timestamp")
+                    return True
+                else:
+                    logger.error(f"Sound effect {content_id} not found for direct update")
+                    return False
                 
         except Exception as e:
             logger.error(f"Error storing sound effect audio for ID {content_id}: {e}")
@@ -518,13 +526,13 @@ class BackgroundMusicProcessor(AudioPostProcessor):
 async def wait_for_webhook_completion_event(content_type: str, content_id: int, timeout: Optional[int] = None,
                                           notifier: Optional[WebhookCompletionNotifier] = None) -> bool:
     """
-    Wait for webhook completion using event-driven approach with precise timing.
+    Wait for webhook completion using database polling for cross-process compatibility.
     
     Args:
         content_type: "sound_effect" or "background_music"
         content_id: ID of the content to wait for
         timeout: Maximum time to wait in seconds (uses config default if None)
-        notifier: Optional webhook notifier instance (uses global if None)
+        notifier: Optional webhook notifier instance (DEPRECATED - using DB polling)
         
     Returns:
         True if webhook completed successfully within timeout, False otherwise
@@ -532,21 +540,37 @@ async def wait_for_webhook_completion_event(content_type: str, content_id: int, 
     if timeout is None:
         timeout = settings.replicate_audio.webhook_timeout
         
-    if notifier is None:
-        notifier = WebhookNotifierFactory.get_global_notifier()
-        
+    import time
+    start_time = time.time()
+    poll_interval = 2  # Poll every 2 seconds
+    
+    logger.info(f"Waiting for {content_type} {content_id} completion via database polling...")
+    
     try:
-        # Create completion event
-        event = await notifier.create_completion_event(content_type, content_id)
+        while time.time() - start_time < timeout:
+            with managed_db_session() as db:
+                if content_type == "sound_effect":
+                    # Check if sound effect has audio data
+                    effect = crud.get_sound_effect(db, content_id)
+                    if effect and effect.audio_data_b64:
+                        elapsed = time.time() - start_time
+                        logger.info(f"Webhook completion for {content_type} {content_id}: success in {elapsed:.2f}s")
+                        return True
+                elif content_type == "background_music":
+                    # Check if text has background music audio
+                    text = crud.get_text(db, content_id)
+                    if text and text.background_music_audio_b64:
+                        elapsed = time.time() - start_time
+                        logger.info(f"Webhook completion for {content_type} {content_id}: success in {elapsed:.2f}s")
+                        return True
+            
+            # Wait before next poll
+            await asyncio.sleep(poll_interval)
         
-        # Wait for completion
-        success, elapsed_time = await notifier.wait_for_completion(content_type, content_id, timeout)
-        
-        # Clean up the event
-        notifier.cleanup_event(content_type, content_id)
-        
-        logger.info(f"Webhook completion for {content_type} {content_id}: {'success' if success else 'failed'} in {elapsed_time:.2f}s")
-        return success
+        # Timeout reached
+        elapsed = time.time() - start_time
+        logger.warning(f"Webhook completion timeout for {content_type} {content_id} after {elapsed:.0f}s")
+        return False
         
     except Exception as e:
         logger.error(f"Error waiting for webhook completion: {e}")
@@ -585,7 +609,7 @@ async def wait_for_sound_effects_completion_event(text_id: int, timeout: Optiona
             # Create events for all effects
             tasks = []
             for effect in effects:
-                task = wait_for_webhook_completion_event("sound_effect", effect.id, timeout, notifier)
+                task = wait_for_webhook_completion_event("sound_effect", effect.effect_id, timeout, notifier)
                 tasks.append(task)
             
             # Wait for all to complete

@@ -43,11 +43,12 @@ async def generate_sound_effects_for_text(text_id: int, background_tasks: Backgr
     
     # Check if any effects need generation
     if force:
-        # Clear existing audio data if force=true
+        # Clear existing audio data if force=true using proper CRUD function
         for effect in sound_effects:
             if effect.audio_data_b64:
-                effect.audio_data_b64 = ""  # Use empty string instead of None due to NOT NULL constraint
-        db.commit()
+                # Use the proper CRUD function that handles timestamps
+                crud.update_sound_effect_audio(db, effect.effect_id, "")
+        # No need for db.commit() as the CRUD function handles it
         effects_needing_generation = sound_effects
         message_suffix = " (forced regeneration)"
     else:
