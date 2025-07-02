@@ -48,10 +48,10 @@
 **Estimated Time**: 1 day
 
 3.1. **Create Cloudflare Account & R2 Service**
-   - Sign up for Cloudflare account
-   - Enable R2 object storage
-   - Create staging bucket (`narratix-staging`)
-   - Create production bucket (`narratix-production`)
+   - ✅ Sign up for Cloudflare account
+   - ✅ Enable R2 object storage
+   - ✅ Create staging bucket (`narratix-staging`)
+   - ✅ Create production bucket (`narratix-production`)
 
 3.2. **Configure Access & Security**
    - Generate R2 API tokens

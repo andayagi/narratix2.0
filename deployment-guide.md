@@ -7,11 +7,16 @@
 - Created requirements-production.txt without heavy ML packages
 - Updated Dockerfile to use production requirements
 
-### 2. Database Configuration
+### 2. Railway Port Configuration
+- Fixed Dockerfile to use Railway's dynamic PORT environment variable
+- Updated health check to use dynamic port
+- Reduced workers to 1 to prevent memory issues
+
+### 3. Database Configuration
 - Added PostgreSQL driver (psycopg2-binary) for production
 - Database pooling configured for both SQLite (dev) and PostgreSQL (prod)
 
-### 3. Environment Variables Required on Railway
+### 4. Environment Variables Required on Railway
 
 Set these in Railway dashboard:
 
