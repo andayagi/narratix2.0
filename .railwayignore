@@ -1,0 +1,57 @@
+# Audio files (should be in cloud storage)
+audio/
+audio_files/
+downloaded_audio/
+extracted_music/
+*.mp3
+*.wav
+
+# Database files (should use cloud database)
+*.db
+*.db-shm
+*.db-wal
+
+# Development files
+venv/
+node_modules/
+.git/
+__pycache__/
+*.pyc
+
+# Test outputs and artifacts  
+tests/output/
+tests/fixtures/
+tests_one_offs/
+# Entire tests directory (not needed in production)
+tests/
+
+# Logs
+logs/
+*.log
+ngrok.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Documentation
+docs/
+*.md
+README.md
+
+# Scripts (development only)
+scripts/
+
+# Package manager files (if not using npm/pnpm)
+package.json
+pnpm-lock.yaml
+
+# Development config
+alembic.ini
+
+# Large build artifacts
+dist/
+build/
+.pytest_cache/ 
