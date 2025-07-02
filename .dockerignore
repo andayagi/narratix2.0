@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+README.md
+
+# Test files
+tests/
+tests_one_offs/
+
+# Development files
+ngrok.log
+.env.local
+.env.development
+
+# Audio files (these should be in cloud storage)
+audio/
+audio_files/
+downloaded_audio/
+extracted_music/
+
+# Database files (should use cloud database)
+*.db
+*.db-shm
+*.db-wal
+
+# Node.js (only needed for local development)
+node_modules/
+package.json
+pnpm-lock.yaml
+
+# Logs (should use cloud logging)
+logs/
+
+# Scripts (development only)
+scripts/ 
